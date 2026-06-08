@@ -1,0 +1,44 @@
+{
+  "PKG-001": {
+    "package_id": "PKG-001",
+    "package_name": "sales_report_january",
+    "checks": [
+      {
+        "name": "Проверка структуры пакета",
+        "status": "ok",
+        "message": "Структура папок соответствует требованиям"
+      },
+      {
+        "name": "Проверка обязательных файлов",
+        "status": "error",
+        "message": "Отсутствует файл metadata.json"
+      },
+      {
+        "name": "Проверка формата дат",
+        "status": "warning",
+        "message": "В файле data.csv найдены даты в формате DD.MM.YYYY"
+      }
+    ]
+  },
+  "PKG-002": {
+    "package_id": "PKG-002",
+    "package_name": "clients_export",
+    "checks": [
+      {
+        "name": "Проверка структуры пакета",
+        "status": "ok",
+        "message": "Структура пакета корректна"
+      },
+      {
+        "name": "Проверка обязательных файлов",
+        "status": "ok",
+        "message": "Все обязательные файлы присутствуют"
+      },
+      {
+        "name": "Проверка формата дат",
+        "status": "ok",
+        "message": "Все даты приведены к формату YYYY-MM-DD"
+      }
+    ]
+  }
+}
