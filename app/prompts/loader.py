@@ -20,6 +20,18 @@ def render_system_prompt(version: str = "v1", **context) -> str:
 
     return Template(text).render(**context)
 
+@lru_cache(maxsize=16)
+def render_prompt_file(file_name: str, **context) -> str:
+    """
+    Загружает любой prompt-файл из app/prompts/ и подставляет переменные, если они есть.
+
+    Пример:
+    render_prompt_file("final_report_v1.j2")
+    """
+    prompt_path = PROMPTS_DIR / file_name
+    text = prompt_path.read_text(encoding="utf-8")
+
+    return Template(text).render(**context)
 
 @lru_cache(maxsize=16)
 def load_tool_description(tool_name: str) -> str:

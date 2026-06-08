@@ -12,7 +12,8 @@ GET_VALIDATION_REPORT_TOOL = {
             "properties": {
                 "package_id": {
                     "type": "string",
-                    "description": "Идентификатор пакета данных, например PKG-001"
+                    "description": "Идентификатор пакета данных в формате PKG-001",
+                    "pattern": "^PKG-[0-9]{3}$"
                 }
             },
             "required": ["package_id"],
