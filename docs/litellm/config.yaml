@@ -1,0 +1,21 @@
+model_list:
+  - model_name: data-package-assistant-primary
+    litellm_params:
+      model: ollama/llama3.2
+      api_base: http://localhost:11434
+
+  - model_name: data-package-assistant-fallback
+    litellm_params:
+      model: ollama/qwen2.5
+      api_base: http://localhost:11434
+
+router_settings:
+  routing_strategy: simple-shuffle
+  fallbacks:
+    - data-package-assistant-primary:
+        - data-package-assistant-fallback
+  num_retries: 2
+  timeout: 30
+
+general_settings:
+  master_key: sk-local-dev-keygit add docs
