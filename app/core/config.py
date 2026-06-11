@@ -1,0 +1,59 @@
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic import Field, SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ENV_FILE = PROJECT_ROOT / ".env"
+
+
+class LLMSettings(BaseSettings):
+    openai_api_key: SecretStr = Field(validation_alias="OPENAI_API_KEY")
+    openai_base_url: str = Field(
+        default="http://localhost:11434/v1",
+        validation_alias="OPENAI_BASE_URL",
+    )
+    default_model: str = Field(
+        default="llama3.2",
+        validation_alias="DEFAULT_MODEL",
+    )
+    request_timeout: float = Field(
+        default=30.0,
+        validation_alias="REQUEST_TIMEOUT",
+    )
+
+    model_config = SettingsConfigDict(
+        env_file=ENV_FILE,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
+class Settings(BaseSettings):
+    llm: LLMSettings = Field(default_factory=LLMSettings)
+
+    redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        validation_alias="REDIS_URL",
+    )
+    cache_ttl_seconds: int = Field(
+        default=3600,
+        validation_alias="CACHE_TTL_SECONDS",
+    )
+    cors_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:3000"],
+        validation_alias="CORS_ORIGINS",
+    )
+
+    model_config = SettingsConfigDict(
+        env_file=ENV_FILE,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
