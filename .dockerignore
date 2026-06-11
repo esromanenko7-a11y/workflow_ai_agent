@@ -1,0 +1,47 @@
+# Git
+.git
+.gitignore
+.github/
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs and local runtime files
+logs/
+*.log
+tmp_*.json
+
+# Tests and notebooks
+tests/
+notebooks/
+
+# Local build artifacts
+dist/
+build/
+*.egg-info/
+
+# Docker local files
+docker-compose.override.yml
+compose.override.yaml

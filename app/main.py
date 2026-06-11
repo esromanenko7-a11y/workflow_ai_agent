@@ -18,13 +18,17 @@ from app.routers.health import router as health_router
 from app.routers.models import router as models_router
 
 
-logging.basicConfig(level=logging.INFO)
+settings = get_settings()
+
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO)
+)
 logger = logging.getLogger("llm-service")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = get_settings()
+
 
     logger.info("Starting FastAPI LLM service")
 
@@ -64,7 +68,7 @@ async def lifespan(app: FastAPI):
             await app.state.cache.aclose()
 
 
-settings = get_settings()
+
 
 app = FastAPI(
     title="Data Package Validation Assistant",

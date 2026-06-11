@@ -46,6 +46,10 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:3000"],
         validation_alias="CORS_ORIGINS",
     )
+    log_level: str = Field(
+        default="INFO",
+        validation_alias="LOG_LEVEL",
+    )
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,

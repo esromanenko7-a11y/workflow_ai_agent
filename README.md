@@ -751,7 +751,290 @@ Get-Content .\logs\tool_calls.jsonl -Encoding UTF8
 ```
 
 ---
+## Docker и контейнеризация
 
+FastAPI-сервис контейнеризирован через Docker.
+
+В проект добавлены:
+
+- `Dockerfile` — multi-stage сборка приложения;
+- `.dockerignore` — исключение локальных и секретных файлов из Docker build context;
+- `compose.yaml` — запуск FastAPI-сервиса и Redis одной командой.
+
+Docker-стек состоит из двух сервисов:
+
+| Сервис | Назначение |
+|---|---|
+| `app` | FastAPI-приложение |
+| `redis` | Redis для cache-aside |
+
+Redis не пробрасывается наружу через `ports`, потому что к нему обращается только `app` внутри Docker Compose сети.
+
+---
+
+### Dockerfile
+
+В проекте используется multi-stage Dockerfile:
+
+1. `builder` — создаёт виртуальное окружение и устанавливает зависимости;
+2. `runtime` — содержит только приложение и готовую `.venv`.
+
+Базовый образ:
+
+```text
+python:3.12-slim-bookworm
+```
+
+Приложение внутри контейнера запускается не под `root`, а под пользователем:
+
+```text
+appuser
+```
+
+Команда запуска FastAPI в контейнере:
+
+```dockerfile
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+`--host 0.0.0.0` нужен, чтобы приложение было доступно снаружи контейнера через проброшенный порт `8000`.
+
+---
+
+### Docker Compose
+
+Для запуска используется файл:
+
+```text
+compose.yaml
+```
+
+Основная команда запуска:
+
+```powershell
+docker compose up -d --build
+```
+
+После запуска Compose поднимает:
+
+- контейнер `app`;
+- контейнер `redis`;
+- named volume `redis_data`;
+- внутреннюю Docker-сеть.
+
+Проверить состояние контейнеров:
+
+```powershell
+docker compose ps
+```
+
+Ожидаемое состояние:
+
+```text
+app     healthy
+redis   healthy
+```
+
+---
+
+### Переменные окружения для Docker
+
+Для Docker-запуска используется `.env`.
+
+Создать его можно из примера:
+
+```powershell
+Copy-Item .\.env.example .\.env
+```
+
+Для Docker Compose важны следующие значения:
+
+```env
+OPENAI_API_KEY=ollama
+OPENAI_BASE_URL=http://host.docker.internal:11434/v1
+DEFAULT_MODEL=llama3.2
+REQUEST_TIMEOUT=30
+REDIS_URL=redis://redis:6379/0
+CACHE_TTL_SECONDS=3600
+CORS_ORIGINS=["http://localhost:3000"]
+LOG_LEVEL=INFO
+```
+
+Важно:
+
+- `.env.example` хранится в Git как безопасный пример;
+- `.env` не коммитится;
+- `.env` не копируется в Docker-образ;
+- внутри Docker Compose Redis доступен по адресу `redis://redis:6379/0`, а не `localhost`.
+
+---
+
+### Healthcheck и readiness
+
+В проекте есть два endpoint для проверки состояния сервиса.
+
+#### `/health`
+
+```text
+GET /health
+```
+
+Liveness endpoint.
+
+Показывает, что FastAPI-процесс жив.
+
+Ответ:
+
+```json
+{"status":"ok"}
+```
+
+Этот endpoint не зависит от Redis. Даже если Redis остановлен, `/health` продолжает возвращать HTTP `200`.
+
+#### `/ready`
+
+```text
+GET /ready
+```
+
+Readiness endpoint.
+
+Проверяет готовность сервиса к полноценной работе. В текущей версии проверяется доступность Redis через `redis.ping()`.
+
+Если Redis доступен:
+
+```json
+{"status":"ok","redis":"up"}
+```
+
+HTTP-статус:
+
+```text
+200 OK
+```
+
+Если Redis недоступен:
+
+```json
+{"status":"degraded","redis":"down"}
+```
+
+HTTP-статус:
+
+```text
+503 Service Unavailable
+```
+
+---
+
+### Проверка Docker-запуска
+
+Собрать образ вручную:
+
+```powershell
+docker build -t llm-service:v1 .
+```
+
+Проверить размер образа:
+
+```powershell
+docker images llm-service
+```
+
+Ожидаемый размер — меньше `500MB`.
+
+Запустить весь стек:
+
+```powershell
+docker compose up -d --build
+```
+
+Проверить контейнеры:
+
+```powershell
+docker compose ps
+```
+
+Проверить `/health`:
+
+```powershell
+curl.exe -i http://localhost:8000/health
+```
+
+Проверить `/ready`:
+
+```powershell
+curl.exe -i http://localhost:8000/ready
+```
+
+Проверить, что приложение работает не под root:
+
+```powershell
+docker compose exec app id
+```
+
+Ожидаемый результат:
+
+```text
+uid=1000(appuser)
+```
+
+Проверить Redis:
+
+```powershell
+docker compose exec redis redis-cli ping
+```
+
+Ожидаемый результат:
+
+```text
+PONG
+```
+
+Проверить поведение при остановленном Redis:
+
+```powershell
+docker compose stop redis
+curl.exe -i http://localhost:8000/health
+curl.exe -i http://localhost:8000/ready
+```
+
+Ожидаемый результат:
+
+- `/health` возвращает HTTP `200`;
+- `/ready` возвращает HTTP `503`.
+
+Вернуть Redis обратно:
+
+```powershell
+docker compose start redis
+```
+
+---
+
+### Проверка содержимого Docker-образа
+
+Проверить, что в образ не попали секреты и локальные файлы:
+
+```powershell
+docker run --rm llm-service:v1 ls -la /app
+```
+
+В образе не должно быть:
+
+- `.env`;
+- `.git`;
+- локальной `.venv` проекта;
+- `tests`;
+- `__pycache__`.
+
+Проверить, что `.env` не попал в Git:
+
+```powershell
+git ls-files | Select-String "\.env$"
+```
+
+Ожидаемый результат — пустой вывод.
 ## Проверенные сценарии
 
 Проверено вручную:
