@@ -1,4 +1,6 @@
-import logging
+import structlog
+from structlog.contextvars import bind_contextvars, clear_contextvars
+from app.observability.logging import setup_logging
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -17,26 +19,31 @@ from app.routers.chat import router as chat_router
 from app.routers.health import router as health_router
 from app.routers.models import router as models_router
 
+from app.observability.tracing import setup_tracing
+
 
 settings = get_settings()
-
-logging.basicConfig(
-    level=getattr(logging, settings.log_level.upper(), logging.INFO)
-)
-logger = logging.getLogger("llm-service")
+setup_logging(settings.log_level)
+logger = structlog.get_logger("llm-service")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings = get_settings()
 
+    logger.info("service_starting")
 
-    logger.info("Starting FastAPI LLM service")
+    # Важно: tracing настраиваем ДО создания AsyncOpenAI-клиента.
+    # Так OpenAIInstrumentor успеет подключиться к OpenAI SDK.
+    setup_tracing(project_name="diploma-fastapi")
 
     # trust_env=False нужен, чтобы локальная Ollama не пыталась ходить через VPN/proxy.
     app.state.http_client = httpx.AsyncClient(
         trust_env=False,
         timeout=settings.llm.request_timeout,
     )
+
+
 
     app.state.openai_client = AsyncOpenAI(
         api_key=settings.llm.openai_api_key.get_secret_value(),
@@ -57,7 +64,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        logger.info("Stopping FastAPI LLM service")
+        logger.info("service_stopping")
 
         await app.state.openai_client.close()
 
@@ -67,23 +74,30 @@ async def lifespan(app: FastAPI):
         if getattr(app.state, "cache", None) is not None:
             await app.state.cache.aclose()
 
-
-
-
 app = FastAPI(
     title="Data Package Validation Assistant",
     description="FastAPI-сервис для ИИ-ассистента проверки пакетов с данными",
     version="0.1.0",
     lifespan=lifespan,
 )
-
-
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
-    request_id = request.headers.get("X-Request-ID", uuid.uuid4().hex)
+    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
+    user_id = request.headers.get("X-User-ID")
+
     request.state.request_id = request_id
 
+    clear_contextvars()
+    bind_contextvars(
+        request_id=request_id,
+        user_id=user_id,
+        method=request.method,
+        path=request.url.path,
+    )
+
     started_at = time.perf_counter()
+
+    logger.info("http_request_started")
 
     try:
         response = await call_next(request)
@@ -91,13 +105,12 @@ async def request_logging_middleware(request: Request, call_next):
         duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
 
         logger.exception(
-            "request failed request_id=%s method=%s path=%s status=%s duration_ms=%s",
-            request_id,
-            request.method,
-            request.url.path,
-            500,
-            duration_ms,
+            "http_request_failed",
+            status_code=500,
+            duration_ms=duration_ms,
         )
+
+        clear_contextvars()
         raise
 
     duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
@@ -105,16 +118,14 @@ async def request_logging_middleware(request: Request, call_next):
     response.headers["X-Request-ID"] = request_id
 
     logger.info(
-        "request completed request_id=%s method=%s path=%s status=%s duration_ms=%s",
-        request_id,
-        request.method,
-        request.url.path,
-        response.status_code,
-        duration_ms,
+        "http_request_completed",
+        status_code=response.status_code,
+        duration_ms=duration_ms,
     )
 
-    return response
+    clear_contextvars()
 
+    return response
 
 @app.exception_handler(LLMError)
 async def handle_llm_error(request: Request, exc: LLMError) -> JSONResponse:

@@ -2,6 +2,8 @@ import hashlib
 import json
 from collections.abc import AsyncIterator
 from typing import Any
+import structlog
+import time
 
 import openai
 from openai import AsyncOpenAI
@@ -14,8 +16,11 @@ from app.core.exceptions import (
     LLMRateLimitError,
     LLMTimeoutError,
 )
+from app.observability.pii import prompt_hash, redact_pii
+
 from app.schemas.chat import ChatDelta, ChatRequest, ChatResponse, Usage
 
+logger = structlog.get_logger("llm-service")
 
 class LLMService:
     def __init__(
@@ -43,6 +48,19 @@ class LLMService:
         digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
         return f"chat:{digest}"
+
+    def _build_prompt_text(self, req: ChatRequest) -> str:
+        """
+        Собирает текст prompt для безопасного логирования.
+
+        Сырой prompt в лог не пишем. Этот текст нужен только для:
+        - prompt_hash;
+        - prompt_preview после PII-маскирования.
+        """
+        return "\n".join(
+            f"{message.role}: {message.content}"
+            for message in req.messages
+        )
 
     async def _get_cached_response(self, cache_key: str) -> ChatResponse | None:
         if self.cache is None:
@@ -81,9 +99,18 @@ class LLMService:
         cached_response = await self._get_cached_response(cache_key)
 
         if cached_response is not None:
+            logger.info(
+                "llm_cache_hit",
+                model=cached_response.model,
+                input_tokens=cached_response.usage.prompt_tokens,
+                output_tokens=cached_response.usage.completion_tokens,
+                finish_reason=cached_response.finish_reason,
+            )
             return cached_response
 
         model = self._get_model(req)
+        raw_prompt = self._build_prompt_text(req)
+        started_at = time.perf_counter()
 
         try:
             response = await self.openai.chat.completions.create(
@@ -102,7 +129,22 @@ class LLMService:
         except Exception as exc:
             raise LLMError(str(exc)) from exc
 
+        latency_ms = round((time.perf_counter() - started_at) * 1000, 2)
+
         chat_response = ChatResponse.from_openai(response, cached=False)
+
+        logger.info(
+            "llm_request_completed",
+            model=chat_response.model,
+            input_tokens=chat_response.usage.prompt_tokens,
+            output_tokens=chat_response.usage.completion_tokens,
+            total_tokens=chat_response.usage.total_tokens,
+            latency_ms=latency_ms,
+            finish_reason=chat_response.finish_reason,
+            prompt_hash=prompt_hash(raw_prompt),
+            prompt_preview=redact_pii(raw_prompt)[:120],
+        )
+
         await self._save_to_cache(cache_key, chat_response)
 
         return chat_response

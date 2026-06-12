@@ -1035,6 +1035,301 @@ git ls-files | Select-String "\.env$"
 ```
 
 Ожидаемый результат — пустой вывод.
+## Observability
+
+В проект добавлен observability-слой для FastAPI LLM-сервиса.
+
+Он помогает отслеживать:
+
+- HTTP-запросы;
+- LLM-вызовы;
+- latency;
+- количество токенов;
+- finish reason;
+- request_id;
+- безопасный prompt preview без сырых персональных данных.
+
+Observability-слой состоит из трёх частей:
+
+| Компонент | Назначение |
+|---|---|
+| Phoenix | UI для просмотра LLM traces |
+| structlog | JSON-логи приложения |
+| PII masking | Маскирование чувствительных данных перед записью в лог |
+
+---
+
+### Phoenix
+
+Phoenix запускается как отдельный сервис в Docker Compose.
+
+UI доступен по адресу:
+
+```text
+http://localhost:6006
+```
+
+В `compose.yaml` добавлен сервис:
+
+```text
+phoenix
+```
+
+Он использует образ:
+
+```text
+arizephoenix/phoenix:latest
+```
+
+и порты:
+
+```text
+6006:6006
+4317:4317
+```
+
+Для хранения данных используется named volume:
+
+```text
+phoenix_data
+```
+
+Контейнер `app` отправляет traces в Phoenix через переменную окружения:
+
+```text
+PHOENIX_COLLECTOR_ENDPOINT=http://phoenix:6006
+```
+
+В коде адрес нормализуется до HTTP endpoint:
+
+```text
+http://phoenix:6006/v1/traces
+```
+
+Это нужно, потому что Phoenix UI находится на `http://phoenix:6006`, а HTTP endpoint для приёма traces — `/v1/traces`.
+
+---
+
+### OpenAI auto-instrumentation
+
+Автоинструментация OpenAI SDK подключена в файле:
+
+```text
+app/observability/tracing.py
+```
+
+На старте приложения вызывается:
+
+```python
+setup_tracing(project_name="diploma-fastapi")
+```
+
+Важно: tracing настраивается в `lifespan` до создания `AsyncOpenAI`-клиента.
+
+Это нужно, чтобы `OpenAIInstrumentor` успел подключиться к OpenAI SDK и автоматически создавать traces для вызовов:
+
+```python
+self.openai.chat.completions.create(...)
+```
+
+После запроса к endpoint:
+
+```text
+POST /chat
+```
+
+в Phoenix появляется LLM span:
+
+```text
+ChatCompletion
+```
+
+В Phoenix UI видно:
+
+- модель;
+- input/output;
+- latency;
+- cumulative tokens;
+- стоимость вызова.
+
+Скриншот trace сохранён в каталоге:
+
+```text
+docs/observability/phoenix_trace.png
+```
+
+Описание скриншота находится здесь:
+
+```text
+docs/observability/README.md
+```
+
+---
+
+### JSON-логи через structlog
+
+Структурные JSON-логи настроены в файле:
+
+```text
+app/observability/logging.py
+```
+
+HTTP middleware в `app/main.py`:
+
+- читает `X-Request-ID` из входящего запроса;
+- если заголовка нет, генерирует новый `request_id`;
+- добавляет `request_id`, `method`, `path`, `user_id` в contextvars;
+- ставит заголовок `X-Request-ID` в ответ;
+- пишет события начала и завершения HTTP-запроса.
+
+Для одного HTTP-запроса появляются события:
+
+```text
+http_request_started
+http_request_completed
+```
+
+Для LLM-вызова появляется событие:
+
+```text
+llm_request_completed
+```
+
+Пример полей в `llm_request_completed`:
+
+```text
+request_id
+model
+input_tokens
+output_tokens
+total_tokens
+latency_ms
+finish_reason
+prompt_hash
+prompt_preview
+```
+
+`request_id` в HTTP-логе и LLM-логе совпадает, поэтому можно связать весь путь одного запроса.
+
+---
+
+### PII-маскирование
+
+Маскирование чувствительных данных реализовано в файле:
+
+```text
+app/observability/pii.py
+```
+
+Функция:
+
+```python
+redact_pii(text: str) -> str
+```
+
+маскирует:
+
+- email;
+- российский телефон;
+- номер банковской карты;
+- ИНН;
+- паспорт.
+
+Сырой prompt в лог не записывается.
+
+Вместо него пишутся:
+
+```text
+prompt_hash
+prompt_preview
+```
+
+Пример исходного текста:
+
+```text
+Мой email ivan@mail.ru, тел +7 (999) 123-45-67, карта 4111 1111 1111 1111
+```
+
+Пример безопасного preview:
+
+```text
+Мой email [EMAIL], тел [PHONE_RU], карта [CARD]
+```
+
+Unit-тесты находятся в файле:
+
+```text
+tests/test_pii.py
+```
+
+Запуск тестов:
+
+```powershell
+python -m pytest tests/test_pii.py
+```
+
+---
+
+### Проверка observability
+
+Запустить стек:
+
+```powershell
+docker compose up -d --build
+```
+
+Проверить контейнеры:
+
+```powershell
+docker compose ps
+```
+
+Ожидается:
+
+```text
+app       healthy
+redis     healthy
+phoenix   Up
+```
+
+Проверить Phoenix UI:
+
+```powershell
+curl.exe -i http://localhost:6006
+```
+
+Ожидается HTTP `200`.
+
+Открыть Phoenix в браузере:
+
+```text
+http://localhost:6006
+```
+
+Сделать `/chat`-запрос:
+
+```powershell
+curl.exe -i -X POST http://localhost:8000/chat `
+  -H "Content-Type: application/json" `
+  -H "X-Request-ID: obs-demo-004" `
+  --data-binary "@tmp_phoenix_chat_004.json"
+```
+
+Проверить JSON-логи:
+
+```powershell
+docker compose logs app --tail=200 | Select-String "obs-demo-004"
+```
+
+В логах должны быть события:
+
+```text
+http_request_started
+llm_request_completed
+http_request_completed
+```
+
+В Phoenix UI должен появиться LLM span `ChatCompletion`.
 ## Проверенные сценарии
 
 Проверено вручную:

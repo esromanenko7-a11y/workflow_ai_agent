@@ -7,3 +7,7 @@ openai
 python-dotenv
 jinja2
 jsonschema
+structlog
+arize-phoenix-otel
+openinference-instrumentation-openai
+pytest
