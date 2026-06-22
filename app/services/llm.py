@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 from collections.abc import AsyncIterator
@@ -112,22 +113,41 @@ class LLMService:
         raw_prompt = self._build_prompt_text(req)
         started_at = time.perf_counter()
 
-        try:
-            response = await self.openai.chat.completions.create(
-                model=model,
-                messages=[message.model_dump() for message in req.messages],
-                temperature=req.temperature,
-                max_tokens=req.max_tokens,
-                timeout=self.settings.llm.request_timeout,
-            )
-        except openai.RateLimitError as exc:
-            raise LLMRateLimitError() from exc
-        except openai.APITimeoutError as exc:
-            raise LLMTimeoutError() from exc
-        except openai.AuthenticationError as exc:
-            raise LLMAuthError() from exc
-        except Exception as exc:
-            raise LLMError(str(exc)) from exc
+        max_retries = self.settings.llm.max_retries
+        retry_base_delay_seconds = self.settings.llm.retry_base_delay_seconds
+
+        for attempt in range(max_retries + 1):
+            try:
+                response = await self.openai.chat.completions.create(
+                    model=model,
+                    messages=[message.model_dump() for message in req.messages],
+                    temperature=req.temperature,
+                    max_tokens=req.max_tokens,
+                    timeout=self.settings.llm.request_timeout,
+                )
+                break
+            except openai.RateLimitError as exc:
+                if attempt >= max_retries:
+                    raise LLMRateLimitError() from exc
+
+                delay_seconds = retry_base_delay_seconds * (2 ** attempt)
+
+                logger.warning(
+                    "llm_retry_scheduled",
+                    attempt=attempt + 1,
+                    max_retries=max_retries,
+                    delay_seconds=delay_seconds,
+                    error_type="RateLimitError",
+                )
+
+                if delay_seconds > 0:
+                    await asyncio.sleep(delay_seconds)
+            except openai.APITimeoutError as exc:
+                raise LLMTimeoutError() from exc
+            except openai.AuthenticationError as exc:
+                raise LLMAuthError() from exc
+            except Exception as exc:
+                raise LLMError(str(exc)) from exc
 
         latency_ms = round((time.perf_counter() - started_at) * 1000, 2)
 

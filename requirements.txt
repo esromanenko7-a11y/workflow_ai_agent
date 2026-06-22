@@ -11,3 +11,5 @@ structlog
 arize-phoenix-otel
 openinference-instrumentation-openai
 pytest
+pytest-mock
+pyyaml

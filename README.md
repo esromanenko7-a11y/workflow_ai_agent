@@ -1058,6 +1058,321 @@ Observability-слой состоит из трёх частей:
 | PII masking | Маскирование чувствительных данных перед записью в лог |
 
 ---
+## Testing and Evaluation
+
+В проект добавлен слой тестирования и оценки качества LLM-приложения.
+
+Он состоит из двух частей:
+
+```text
+tests/   — быстрые unit-тесты
+eval/    — отдельный evaluation-прогон качества ответов
+```
+
+Unit-тесты и evaluation разделены намеренно.
+
+Unit-тесты запускаются часто и не требуют API-ключей, сети или реальной LLM-модели.
+
+Evaluation запускается вручную при изменении промпта, модели или логики ассистента.
+
+---
+
+### Unit-тесты
+
+Unit-тесты находятся в каталоге:
+
+```text
+tests/unit/
+```
+
+Запуск быстрых unit-тестов:
+
+```powershell
+python -m pytest tests/unit -m "not llm"
+```
+
+Текущий набор unit-тестов проверяет:
+
+- PII-маскирование;
+- Pydantic-схемы `ChatRequest`, `Message`, `ChatResponse`;
+- парсинг ответа OpenAI-compatible API;
+- формирование prompt text;
+- защиту от f-string injection через фигурные скобки в пользовательском тексте;
+- cache key без `user_id` и `session_id`;
+- cache hit без вызова OpenAI;
+- cache miss с вызовом OpenAI и сохранением ответа в кеш;
+- retry на `RateLimitError / 429`;
+- структуру `eval/golden_dataset.json`.
+
+Для marker `llm` добавлен файл:
+
+```text
+pytest.ini
+```
+
+Обычные unit-тесты запускаются без сетевых вызовов:
+
+```powershell
+python -m pytest tests/unit -m "not llm"
+```
+
+---
+
+### Retry на 429
+
+В `LLMService` добавлен явный retry для ошибки rate limit.
+
+Настройки находятся в:
+
+```text
+app/core/config.py
+```
+
+Параметры:
+
+```text
+LLM_MAX_RETRIES
+LLM_RETRY_BASE_DELAY_SECONDS
+```
+
+По умолчанию:
+
+```text
+LLM_MAX_RETRIES=2
+LLM_RETRY_BASE_DELAY_SECONDS=0.5
+```
+
+Это означает:
+
+```text
+1 основной вызов + 2 повтора = максимум 3 попытки
+```
+
+При повторе в JSON-лог пишется событие:
+
+```text
+llm_retry_scheduled
+```
+
+---
+
+### Golden dataset
+
+Golden dataset находится в файле:
+
+```text
+eval/golden_dataset.json
+```
+
+Структура верхнего уровня:
+
+```json
+{
+  "version": 1,
+  "items": []
+}
+```
+
+Каждый item содержит:
+
+```text
+id
+question
+expected_answer
+expected_keywords
+category
+difficulty
+source
+must_not_contain
+```
+
+Текущий dataset содержит:
+
+```text
+22 items
+6 категорий
+3 hard-кейса
+уникальные id
+```
+
+Dataset посвящён предметной области дипломного проекта: проверке пакетов данных, статусам проверок, критичности ошибок, warnings, PII, metadata, schema validation и бизнес-правилам.
+
+---
+
+### Evaluation
+
+Evaluation-скрипт находится здесь:
+
+```text
+eval/run_evaluation.py
+```
+
+Это не pytest-тест, а отдельный CLI-прогон.
+
+Пример dry-run запуска без LLM judge:
+
+```powershell
+python eval/run_evaluation.py `
+  --golden eval/golden_dataset.json `
+  --judge mock `
+  --out eval/runs/2026-06-22.json `
+  --dry-run
+```
+
+Dry-run режим нужен для проверки структуры pipeline без API-ключей и сетевых вызовов.
+
+В обычном режиме скрипт:
+
+1. читает `eval/golden_dataset.json`;
+2. отправляет вопрос в FastAPI endpoint `/chat`;
+3. получает ответ модели;
+4. отправляет вопрос, expected answer и actual answer в judge-модель;
+5. получает оценки;
+6. сохраняет результат в `eval/runs/<YYYY-MM-DD>.json`.
+
+Production-модель и judge вызываются с:
+
+```text
+temperature=0
+```
+
+Judge вызывается с:
+
+```python
+response_format={"type": "json_object"}
+```
+
+Judge prompt использует подход G-Eval / reason-then-score:
+
+```text
+сначала reasoning
+потом scores
+потом explanation
+```
+
+Оцениваются критерии:
+
+```text
+relevance
+correctness
+completeness
+```
+
+---
+
+### Evaluation run artifact
+
+Результат evaluation-прогона сохраняется в:
+
+```text
+eval/runs/2026-06-22.json
+```
+
+Файл содержит:
+
+```text
+run_id
+timestamp
+model_under_test
+judge_model
+golden_version
+items
+aggregates
+```
+
+В `aggregates` сохраняются:
+
+```text
+relevance_avg
+correctness_avg
+completeness_avg
+min_correctness
+```
+
+Проверка чтения агрегатов:
+
+```powershell
+python -c "import json; print(json.load(open('eval/runs/2026-06-22.json', encoding='utf-8'))['aggregates']['correctness_avg'])"
+```
+
+---
+
+### Quality thresholds
+
+Пороги качества находятся в файле:
+
+```text
+eval/thresholds.yaml
+```
+
+Текущие пороги:
+
+```yaml
+correctness_avg: 4.0
+min_correctness: 2.0
+```
+
+Скрипт проверки порогов:
+
+```text
+eval/check_thresholds.py
+```
+
+Запуск:
+
+```powershell
+python eval/check_thresholds.py --run eval/runs/2026-06-22.json
+```
+
+Если качество выше порогов, вывод будет:
+
+```text
+Quality thresholds passed.
+```
+
+Если хотя бы один порог нарушен, скрипт печатает список нарушений и завершается с кодом `1`.
+
+Пример нарушения:
+
+```text
+Quality thresholds failed:
+- correctness_avg: 3.500 < required 4.000
+- min_correctness: 1.000 < required 2.000
+```
+
+Такой скрипт можно использовать как правило “можно/нельзя релизить” перед изменением промпта или модели.
+
+---
+
+### Проверка всего testing/evaluation слоя
+
+Быстрые unit-тесты:
+
+```powershell
+python -m pytest tests/unit -m "not llm"
+```
+
+Проверка eval-скриптов:
+
+```powershell
+python -m py_compile eval/run_evaluation.py eval/check_thresholds.py
+```
+
+Dry-run evaluation:
+
+```powershell
+python eval/run_evaluation.py `
+  --golden eval/golden_dataset.json `
+  --judge mock `
+  --out eval/runs/2026-06-22.json `
+  --dry-run
+```
+
+Проверка thresholds:
+
+```powershell
+python eval/check_thresholds.py --run eval/runs/2026-06-22.json
+```
 
 ### Phoenix
 

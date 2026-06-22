@@ -23,6 +23,17 @@ class LLMSettings(BaseSettings):
         default=30.0,
         validation_alias="REQUEST_TIMEOUT",
     )
+    max_retries: int = Field(
+        default=2,
+        ge=0,
+        le=10,
+        validation_alias="LLM_MAX_RETRIES",
+    )
+    retry_base_delay_seconds: float = Field(
+        default=0.5,
+        ge=0,
+        validation_alias="LLM_RETRY_BASE_DELAY_SECONDS",
+    )
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,
