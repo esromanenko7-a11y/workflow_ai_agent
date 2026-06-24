@@ -3,6 +3,7 @@ from structlog.contextvars import bind_contextvars, clear_contextvars
 from app.observability.logging import setup_logging
 import time
 import uuid
+import secrets
 from contextlib import asynccontextmanager
 
 import httpx
@@ -32,6 +33,9 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
 
     logger.info("service_starting")
+
+    app.state.canary = f"CANARY_{secrets.token_hex(4)}"
+    logger.info("security_canary_initialized")
 
     # Важно: tracing настраиваем ДО создания AsyncOpenAI-клиента.
     # Так OpenAIInstrumentor успеет подключиться к OpenAI SDK.
