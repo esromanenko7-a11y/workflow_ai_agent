@@ -13,3 +13,5 @@ openinference-instrumentation-openai
 pytest
 pytest-mock
 pyyaml
+aiofiles==24.1.0
+tiktoken>=0.12.0

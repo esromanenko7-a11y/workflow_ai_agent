@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -60,6 +61,23 @@ class Settings(BaseSettings):
     log_level: str = Field(
         default="INFO",
         validation_alias="LOG_LEVEL",
+    )
+    chat_repository: Literal["json", "postgres"] = Field(
+        default="json",
+        validation_alias="CHAT_REPOSITORY",
+    )
+    chat_storage_dir: Path = Field(
+        default=Path("./var/chats"),
+        validation_alias="CHAT_STORAGE_DIR",
+    )
+    chat_context_strategy: Literal["sliding", "hybrid"] = Field(
+        default="sliding",
+        validation_alias="CHAT_CONTEXT_STRATEGY",
+    )
+    chat_context_window: int = Field(
+        default=10,
+        ge=1,
+        validation_alias="CHAT_CONTEXT_WINDOW",
     )
 
     model_config = SettingsConfigDict(
