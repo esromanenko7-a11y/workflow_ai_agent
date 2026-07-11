@@ -6,6 +6,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.storage.memory import MemoryStorage
 
+from bot.broadcast_worker import broadcast_worker
 from bot.config import get_bot_settings
 from bot.handlers import router
 from bot.services.backend_client import BackendClient
@@ -50,6 +51,7 @@ async def main() -> None:
 
     backend = BackendClient(
         backend_url=settings.backend_url,
+        admin_token=settings.admin_token.get_secret_value(),
     )
 
     dispatcher["backend"] = backend
@@ -72,6 +74,7 @@ async def main() -> None:
         await asyncio.gather(
             dispatcher.start_polling(bot),
             server.serve(),
+            broadcast_worker(bot=bot, backend=backend),
         )
     finally:
         await backend.close()

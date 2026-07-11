@@ -225,3 +225,75 @@ async def test_save_feedback_sends_post_request() -> None:
             owner_external_id="telegram:123",
             value="up",
         )
+
+async def test_get_admin_stats_sends_admin_token() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/chats/admin/stats"
+        assert request.headers["X-Admin-Token"] == "secret-admin-token"
+
+        return httpx.Response(
+            status_code=200,
+            json={
+                "total_messages": 1,
+                "active_users": 1,
+                "avg_latency_ms": None,
+                "moderation_block_rate": 0.0,
+                "feedback_up_ratio": 1.0,
+                "top_questions": [],
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://backend",
+    ) as http_client:
+        backend = BackendClient(
+            backend_url="http://backend",
+            client=http_client,
+            admin_token="secret-admin-token",
+        )
+
+        result = await backend.get_admin_stats()
+
+    assert result["total_messages"] == 1
+
+
+async def test_enqueue_broadcast_sends_admin_token() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/chats/admin/broadcast"
+        assert request.headers["X-Admin-Token"] == "secret-admin-token"
+
+        body = await request.aread()
+        assert b'"message":"Hello users"' in body
+        assert b'"interface_filter":"telegram"' in body
+
+        return httpx.Response(
+            status_code=200,
+            json={
+                "status": "queued",
+                "broadcast_id": "77777777-7777-7777-7777-777777777777",
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://backend",
+    ) as http_client:
+        backend = BackendClient(
+            backend_url="http://backend",
+            client=http_client,
+            admin_token="secret-admin-token",
+        )
+
+        result = await backend.enqueue_broadcast(
+            message="Hello users",
+            interface_filter="telegram",
+        )
+
+    assert result["status"] == "queued"

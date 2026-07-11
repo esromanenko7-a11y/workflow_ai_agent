@@ -1,7 +1,7 @@
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import aiofiles
 
@@ -134,6 +134,98 @@ class JsonChatRepository:
             messages.append(ChatMessage.model_validate(payload))
 
         return messages[-limit:]
+
+    async def get_admin_stats(self) -> dict:
+        return {
+            "total_messages": 0,
+            "active_users": 0,
+            "avg_latency_ms": None,
+            "moderation_block_rate": 0.0,
+            "feedback_up_ratio": 0.0,
+            "top_questions": [],
+        }
+
+    async def list_admin_users(
+        self,
+        limit: int = 50,
+    ) -> list[dict]:
+        return []
+
+    async def enqueue_broadcast(
+        self,
+        message: str,
+        interface_filter: str,
+    ) -> UUID:
+        broadcast_id = uuid4()
+        broadcast_path = self.storage_dir / "broadcast_queue.jsonl"
+
+        record = {
+            "id": str(broadcast_id),
+            "message": message,
+            "interface": interface_filter,
+            "status": "pending",
+        }
+
+        with broadcast_path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        return broadcast_id
+
+    async def list_pending_broadcasts(
+        self,
+        interface_filter: str = "telegram",
+        limit: int = 10,
+    ) -> list[dict]:
+        broadcast_path = self.storage_dir / "broadcast_queue.jsonl"
+
+        if not broadcast_path.exists():
+            return []
+
+        result: list[dict] = []
+
+        for line in broadcast_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+
+            item = json.loads(line)
+
+            if (
+                item.get("interface") == interface_filter
+                and item.get("status") == "pending"
+            ):
+                result.append(item)
+
+            if len(result) >= limit:
+                break
+
+        return result
+
+    async def mark_broadcast_sent(
+        self,
+        broadcast_id: UUID,
+    ) -> None:
+        broadcast_path = self.storage_dir / "broadcast_queue.jsonl"
+
+        if not broadcast_path.exists():
+            return
+
+        lines = []
+
+        for line in broadcast_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+
+            item = json.loads(line)
+
+            if item.get("id") == str(broadcast_id):
+                item["status"] = "sent"
+
+            lines.append(json.dumps(item, ensure_ascii=False))
+
+        broadcast_path.write_text(
+            "\n".join(lines) + "\n",
+            encoding="utf-8",
+        )
 
     async def save_feedback(
         self,

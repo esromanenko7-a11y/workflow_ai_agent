@@ -66,6 +66,11 @@ class Settings(BaseSettings):
         default="INFO",
         validation_alias="LOG_LEVEL",
     )
+    admin_token: SecretStr = Field(
+        default=SecretStr("replace-me"),
+        validation_alias="ADMIN_TOKEN",
+    )
+
     chat_repository: Literal["json", "postgres"] = Field(
         default="json",
         validation_alias="CHAT_REPOSITORY",

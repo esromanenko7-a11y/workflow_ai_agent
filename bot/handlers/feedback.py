@@ -2,7 +2,7 @@
 from aiogram import F, Router
 from aiogram.types import CallbackQuery
 
-from bot.handlers.common import backend_error_text, get_owner_external_id
+from bot.handlers.common import backend_error_text
 from bot.services.backend_client import BackendClient
 
 
@@ -40,15 +40,17 @@ async def handle_feedback(
         return
 
     try:
+        owner_external_id = f"telegram:{callback.from_user.id}"
+
         chat_id = await backend.get_or_create_chat(
-            owner_external_id=get_owner_external_id(callback.message),
+            owner_external_id=owner_external_id,
             interface="telegram",
         )
 
         await backend.save_feedback(
             chat_id=chat_id,
             message_id=message_id,
-            owner_external_id=get_owner_external_id(callback.message),
+            owner_external_id=owner_external_id,
             value=value,
         )
 

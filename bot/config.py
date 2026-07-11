@@ -31,6 +31,9 @@ class BotSettings(BaseSettings):
     internal_token: SecretStr = Field(
         validation_alias="INTERNAL_TOKEN",
     )
+    admin_token: SecretStr = Field(
+        validation_alias="ADMIN_TOKEN",
+    )
     bot_api_port: int = Field(
         default=9000,
         validation_alias="BOT_API_PORT",

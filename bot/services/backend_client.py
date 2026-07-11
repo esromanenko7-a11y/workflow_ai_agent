@@ -10,8 +10,10 @@ class BackendClient:
         self,
         backend_url: str,
         client: httpx.AsyncClient | None = None,
+        admin_token: str | None = None,
     ) -> None:
         self.backend_url = backend_url.rstrip("/")
+        self.admin_token = admin_token
 
         self.default_timeout = httpx.Timeout(
             connect=3.0,
@@ -124,6 +126,78 @@ class BackendClient:
             json={
                 "value": value,
             },
+        )
+        response.raise_for_status()
+
+    def _admin_headers(self) -> dict[str, str]:
+        if not self.admin_token:
+            raise RuntimeError("ADMIN_TOKEN is not configured for bot")
+
+        return {
+            "X-Admin-Token": self.admin_token,
+        }
+
+    async def get_admin_stats(self) -> dict:
+        response = await self.http.get(
+            "/chats/admin/stats",
+            headers=self._admin_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def get_admin_users(
+        self,
+        limit: int = 50,
+    ) -> dict:
+        response = await self.http.get(
+            "/chats/admin/users",
+            params={
+                "limit": limit,
+            },
+            headers=self._admin_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def enqueue_broadcast(
+        self,
+        message: str,
+        interface_filter: str = "telegram",
+    ) -> dict:
+        response = await self.http.post(
+            "/chats/admin/broadcast",
+            headers=self._admin_headers(),
+            json={
+                "message": message,
+                "interface_filter": interface_filter,
+            },
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def list_pending_broadcasts(
+        self,
+        interface_filter: str = "telegram",
+        limit: int = 10,
+    ) -> dict:
+        response = await self.http.get(
+            "/chats/admin/broadcasts/pending",
+            params={
+                "interface_filter": interface_filter,
+                "limit": limit,
+            },
+            headers=self._admin_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def mark_broadcast_sent(
+        self,
+        broadcast_id: str,
+    ) -> None:
+        response = await self.http.post(
+            f"/chats/admin/broadcasts/{broadcast_id}/sent",
+            headers=self._admin_headers(),
         )
         response.raise_for_status()
 

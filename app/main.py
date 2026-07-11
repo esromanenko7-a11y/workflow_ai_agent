@@ -1,5 +1,6 @@
 import structlog
 from structlog.contextvars import bind_contextvars, clear_contextvars
+from app.admin.routes import router as admin_router
 from app.chat.routes import router as chats_router
 from app.observability.logging import setup_logging
 import time
@@ -192,4 +193,5 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(models_router)
 app.include_router(llm_chat_router)
+app.include_router(admin_router)
 app.include_router(chats_router)
