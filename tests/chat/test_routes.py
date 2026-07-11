@@ -1,5 +1,5 @@
 ﻿from collections.abc import AsyncIterator
-from uuid import uuid4
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 
@@ -11,13 +11,13 @@ from app.main import app
 class FakeChatService:
     def __init__(self) -> None:
         self.chat = Chat(
-            id=uuid4(),
-            owner_external_id="test-owner",
-            interface="cli",
-            system_prompt="Test system prompt",
+            owner_external_id="test-user",
+            interface="test",
+            system_prompt="System prompt",
         )
-        self.messages: list[ChatMessage] = []
         self.clear_called = False
+        self.last_user_content: str | None = None
+        self.last_media_refs: dict | None = None
 
     async def create_chat(
         self,
@@ -32,42 +32,39 @@ class FakeChatService:
         )
         return self.chat
 
-    async def get_chat(self, chat_id):
+    async def get_chat(self, chat_id: UUID) -> Chat | None:
         if chat_id == self.chat.id:
             return self.chat
 
         return None
 
-    async def list_messages(self, chat_id, limit: int = 50):
-        return self.messages[-limit:]
-
-    async def clear_history(self, chat_id) -> None:
-        self.clear_called = True
-        self.messages = []
-
-    async def send_message(
+    async def list_messages(
         self,
-        chat_id,
-        user_content: str,
-    ) -> AsyncIterator[str]:
-        self.messages.append(
+        chat_id: UUID,
+        limit: int = 50,
+    ) -> list[ChatMessage]:
+        return [
             ChatMessage(
                 chat_id=chat_id,
                 role="user",
-                content=user_content,
+                content="hello",
             )
-        )
+        ]
 
-        for chunk in ["Hello", ", ", "world"]:
-            yield chunk
+    async def send_message(
+        self,
+        chat_id: UUID,
+        user_content: str,
+        media_refs: dict | None = None,
+    ) -> AsyncIterator[str]:
+        self.last_user_content = user_content
+        self.last_media_refs = media_refs
 
-        self.messages.append(
-            ChatMessage(
-                chat_id=chat_id,
-                role="assistant",
-                content="Hello, world",
-            )
-        )
+        yield "one"
+        yield "two"
+
+    async def clear_history(self, chat_id: UUID) -> None:
+        self.clear_called = True
 
 
 def test_create_chat_endpoint() -> None:
@@ -76,17 +73,20 @@ def test_create_chat_endpoint() -> None:
 
     try:
         client = TestClient(app)
+
         response = client.post(
             "/chats",
             json={
                 "owner_external_id": "user-1",
-                "interface": "cli",
-                "system_prompt": "You are helpful.",
+                "interface": "telegram",
+                "system_prompt": "You are helpful",
             },
         )
 
         assert response.status_code == 200
-        assert response.json()["chat_id"] == str(fake_service.chat.id)
+        assert response.json() == {
+            "chat_id": str(fake_service.chat.id),
+        }
     finally:
         app.dependency_overrides.clear()
 
@@ -97,40 +97,30 @@ def test_get_chat_endpoint() -> None:
 
     try:
         client = TestClient(app)
+
         response = client.get(f"/chats/{fake_service.chat.id}")
 
         assert response.status_code == 200
         assert response.json()["id"] == str(fake_service.chat.id)
-        assert response.json()["owner_external_id"] == "test-owner"
+        assert response.json()["owner_external_id"] == "test-user"
     finally:
         app.dependency_overrides.clear()
 
 
 def test_list_messages_endpoint() -> None:
     fake_service = FakeChatService()
-    fake_service.messages = [
-        ChatMessage(
-            chat_id=fake_service.chat.id,
-            role="user",
-            content="Hello",
-        ),
-        ChatMessage(
-            chat_id=fake_service.chat.id,
-            role="assistant",
-            content="Hi",
-        ),
-    ]
     app.dependency_overrides[get_chat_service] = lambda: fake_service
 
     try:
         client = TestClient(app)
-        response = client.get(f"/chats/{fake_service.chat.id}/messages")
+
+        response = client.get(
+            f"/chats/{fake_service.chat.id}/messages",
+        )
 
         assert response.status_code == 200
-        assert [item["role"] for item in response.json()] == [
-            "user",
-            "assistant",
-        ]
+        assert response.json()[0]["role"] == "user"
+        assert response.json()[0]["content"] == "hello"
     finally:
         app.dependency_overrides.clear()
 
@@ -141,39 +131,43 @@ def test_send_message_endpoint_streams_sse() -> None:
 
     try:
         client = TestClient(app)
+
         with client.stream(
             "POST",
             f"/chats/{fake_service.chat.id}/messages",
-            json={"content": "Hi"},
+            data={
+                "content": "Hi",
+            },
         ) as response:
             body = response.read().decode("utf-8")
 
         assert response.status_code == 200
-        assert "data: Hello" in body
-        assert "data: , " in body
-        assert "data: world" in body
-        assert "data: [DONE]" in body
+        assert fake_service.last_user_content == "Hi"
+        assert fake_service.last_media_refs is None
+        assert body == (
+            'data: {"type": "token", "delta": "one"}\n\n'
+            'data: {"type": "token", "delta": "two"}\n\n'
+            'data: {"type": "done"}\n\n'
+        )
     finally:
         app.dependency_overrides.clear()
 
 
 def test_clear_messages_endpoint() -> None:
     fake_service = FakeChatService()
-    fake_service.messages = [
-        ChatMessage(
-            chat_id=fake_service.chat.id,
-            role="user",
-            content="Hello",
-        )
-    ]
     app.dependency_overrides[get_chat_service] = lambda: fake_service
 
     try:
         client = TestClient(app)
-        response = client.delete(f"/chats/{fake_service.chat.id}/messages")
+
+        response = client.delete(
+            f"/chats/{fake_service.chat.id}/messages",
+        )
 
         assert response.status_code == 200
-        assert response.json() == {"status": "ok"}
+        assert response.json() == {
+            "status": "ok",
+        }
         assert fake_service.clear_called is True
     finally:
         app.dependency_overrides.clear()

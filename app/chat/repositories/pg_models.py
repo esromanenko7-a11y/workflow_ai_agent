@@ -2,7 +2,7 @@
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, Text, text
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -60,6 +60,10 @@ class ChatMessageRow(Base):
     )
     tokens: Mapped[int | None] = mapped_column(
         Integer,
+        nullable=True,
+    )
+    media_refs: Mapped[dict | None] = mapped_column(
+        JSONB,
         nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(

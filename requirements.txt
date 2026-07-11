@@ -20,3 +20,6 @@ asyncpg
 alembic
 aiogram
 aiohttp-socks
+python-multipart
+pypdf
+python-docx

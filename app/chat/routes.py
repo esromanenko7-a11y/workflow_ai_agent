@@ -1,16 +1,20 @@
-﻿from collections.abc import AsyncIterator
+﻿import json
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.chat.domain import Chat, ChatMessage
 from app.chat.deps import get_chat_service
+from app.chat.domain import Chat, ChatMessage
+from app.chat.media import media_to_part
 from app.chat.service import ChatService
 
 
-router = APIRouter(prefix="/chats", tags=["chats"])
+router = APIRouter(
+    prefix="/chats",
+    tags=["chats"],
+)
 
 
 class CreateChatIn(BaseModel):
@@ -23,25 +27,21 @@ class CreateChatOut(BaseModel):
     chat_id: UUID
 
 
-class MessageIn(BaseModel):
-    content: str = Field(min_length=1)
-
-
-@router.post("", response_model=CreateChatOut)
+@router.post("")
 async def create_chat(
-    body: CreateChatIn,
+    payload: CreateChatIn,
     chat_service: ChatService = Depends(get_chat_service),
 ) -> CreateChatOut:
     chat = await chat_service.create_chat(
-        owner_external_id=body.owner_external_id,
-        interface=body.interface,
-        system_prompt=body.system_prompt,
+        owner_external_id=payload.owner_external_id,
+        interface=payload.interface,
+        system_prompt=payload.system_prompt,
     )
 
     return CreateChatOut(chat_id=chat.id)
 
 
-@router.get("/{chat_id}", response_model=Chat)
+@router.get("/{chat_id}")
 async def get_chat(
     chat_id: UUID,
     chat_service: ChatService = Depends(get_chat_service),
@@ -49,12 +49,15 @@ async def get_chat(
     chat = await chat_service.get_chat(chat_id)
 
     if chat is None:
-        raise HTTPException(status_code=404, detail="Chat not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Chat not found",
+        )
 
     return chat
 
 
-@router.get("/{chat_id}/messages", response_model=list[ChatMessage])
+@router.get("/{chat_id}/messages")
 async def list_messages(
     chat_id: UUID,
     limit: int = Query(default=50, ge=1, le=200),
@@ -63,27 +66,68 @@ async def list_messages(
     chat = await chat_service.get_chat(chat_id)
 
     if chat is None:
-        raise HTTPException(status_code=404, detail="Chat not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Chat not found",
+        )
 
-    return await chat_service.list_messages(chat_id, limit=limit)
+    return await chat_service.list_messages(
+        chat_id=chat_id,
+        limit=limit,
+    )
 
 
 @router.post("/{chat_id}/messages")
 async def send_message(
     chat_id: UUID,
-    body: MessageIn,
+    content: str = Form(...),
+    media: UploadFile | None = File(default=None),
     chat_service: ChatService = Depends(get_chat_service),
 ) -> StreamingResponse:
     chat = await chat_service.get_chat(chat_id)
 
     if chat is None:
-        raise HTTPException(status_code=404, detail="Chat not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Chat not found",
+        )
 
-    async def event_stream() -> AsyncIterator[str]:
-        async for chunk in chat_service.send_message(chat_id, body.content):
-            yield f"data: {chunk}\n\n"
+    media_refs = None
 
-        yield "data: [DONE]\n\n"
+    if media is not None:
+        try:
+            media_part = await media_to_part(media)
+        except ValueError as error:
+            raise HTTPException(
+                status_code=415,
+                detail=str(error),
+            ) from error
+
+        media_refs = {
+            "mime": media.content_type,
+            "size": media.size,
+            "filename": media.filename,
+            "part": media_part,
+        }
+
+    async def event_stream():
+        async for chunk in chat_service.send_message(
+            chat_id=chat_id,
+            user_content=content,
+            media_refs=media_refs,
+        ):
+            payload = {
+                "type": "token",
+                "delta": chunk,
+            }
+
+            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+        done_payload = {
+            "type": "done",
+        }
+
+        yield f"data: {json.dumps(done_payload, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_stream(),
@@ -99,8 +143,13 @@ async def clear_messages(
     chat = await chat_service.get_chat(chat_id)
 
     if chat is None:
-        raise HTTPException(status_code=404, detail="Chat not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Chat not found",
+        )
 
     await chat_service.clear_history(chat_id)
 
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+    }

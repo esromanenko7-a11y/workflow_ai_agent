@@ -1,5 +1,6 @@
-﻿from aiogram import F, Router
-from aiogram.filters import Command, StateFilter
+﻿import httpx
+from aiogram import F, Router
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
@@ -7,34 +8,36 @@ from bot.handlers.common import backend_error_text, get_user_chat_id
 from bot.keyboards.inline import get_topic_title, topics_kb
 from bot.services.backend_client import BackendClient
 from bot.states import AskFlow
+from bot.web import stream_to_chat
 
 
 router = Router()
 
 
 @router.message(Command("ask"))
-async def ask_start_handler(
+async def start_ask_flow(
     message: Message,
     state: FSMContext,
 ) -> None:
     await state.set_state(AskFlow.waiting_for_topic)
 
     await message.answer(
-        "Выберите тему вопроса по проверке пакета данных:",
+        "Выберите тему вопроса:",
         reply_markup=topics_kb(),
     )
 
 
 @router.callback_query(
-    StateFilter(AskFlow.waiting_for_topic),
+    AskFlow.waiting_for_topic,
     F.data.startswith("topic:"),
 )
-async def topic_selected_handler(
+async def handle_topic_choice(
     callback: CallbackQuery,
     state: FSMContext,
 ) -> None:
-    data = callback.data or ""
-    topic_slug = data.removeprefix("topic:")
+    await callback.answer()
+
+    topic_slug = (callback.data or "").removeprefix("topic:")
 
     if topic_slug == "cancel":
         await state.clear()
@@ -42,7 +45,6 @@ async def topic_selected_handler(
         if callback.message is not None:
             await callback.message.edit_text("Сценарий отменён.")
 
-        await callback.answer()
         return
 
     topic_title = get_topic_title(topic_slug)
@@ -52,46 +54,47 @@ async def topic_selected_handler(
 
     if callback.message is not None:
         await callback.message.edit_text(
-            f"Тема: {topic_title}\n\nТеперь напишите вопрос."
+            f"Тема: {topic_title}\nТеперь напишите вопрос.",
         )
-
-    await callback.answer()
 
 
 @router.message(
-    StateFilter(AskFlow.waiting_for_question),
+    AskFlow.waiting_for_question,
     F.text,
 )
-async def question_handler(
+async def handle_topic_question(
     message: Message,
     state: FSMContext,
     backend: BackendClient,
 ) -> None:
-    if message.text is None:
-        return
-
     data = await state.get_data()
-    topic = data.get("topic", "Общий вопрос")
+    topic = data.get("topic", "проверка пакета данных")
 
     prompt = f"Тема: {topic}. Вопрос: {message.text}"
 
     try:
-        chat_id = await get_user_chat_id(message, backend)
+        chat_id = await get_user_chat_id(
+            message=message,
+            backend=backend,
+        )
 
-        answer_message = await message.answer("Думаю...")
-        buffer = ""
-
-        async for chunk in backend.send_message(
+        tokens = backend.send_message(
             chat_id=chat_id,
             content=prompt,
-        ):
-            buffer += chunk
-            await answer_message.edit_text(buffer)
+        )
 
-        if not buffer:
-            await answer_message.edit_text("Backend вернул пустой ответ.")
+        await stream_to_chat(
+            message=message,
+            tokens=tokens,
+        )
 
-    except Exception as error:
+    except (
+        httpx.ConnectError,
+        httpx.ConnectTimeout,
+        httpx.ReadTimeout,
+        httpx.HTTPStatusError,
+    ) as error:
         await message.answer(backend_error_text(error))
+
     finally:
         await state.clear()

@@ -1,5 +1,5 @@
-from datetime import UTC, datetime
-from typing import Literal
+﻿from datetime import UTC, datetime
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,6 +16,7 @@ class ChatMessage(BaseModel):
     role: ChatRole
     content: str
     tokens: int | None = None
+    media_refs: dict[str, Any] | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

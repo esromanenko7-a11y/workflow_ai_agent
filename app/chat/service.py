@@ -1,4 +1,6 @@
-﻿from collections.abc import AsyncIterator
+﻿import json
+from collections.abc import AsyncIterator
+from typing import Any
 from uuid import UUID
 
 import structlog
@@ -8,49 +10,54 @@ from app.chat.domain import Chat, ChatMessage
 from app.chat.repository import ChatRepository
 
 
-logger = structlog.get_logger("chat-service")
-
+logger = structlog.get_logger(__name__)
 
 CONTEXT_WINDOW_TOKENS = 128_000
 RESPONSE_TOKENS = 1_000
 SAFETY_MARGIN = 500
 
+ChatCompletionMessage = dict[str, Any]
 
-ChatCompletionMessage = dict[str, str]
+
+def _content_to_text_for_token_count(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        chunks: list[str] = []
+
+        for part in content:
+            if not isinstance(part, dict):
+                chunks.append(str(part))
+                continue
+
+            if part.get("type") == "text":
+                chunks.append(str(part.get("text", "")))
+            else:
+                chunks.append(json.dumps(part, ensure_ascii=False))
+
+        return "\n".join(chunks)
+
+    return str(content)
 
 
 def _count_text_tokens(text: str) -> int:
-    """
-    Считает токены для одного текста.
-
-    Основной путь — tiktoken o200k_base, как требуется в задании.
-    Fallback нужен для локальной разработки: tiktoken при первом запуске может
-    пытаться скачать BPE-файл, а на машине может быть настроен SOCKS proxy
-    без установленной requests[socks].
-    """
     try:
         encoding = tiktoken.get_encoding("o200k_base")
         return len(encoding.encode(text))
     except Exception:
-        # Грубая оценка: в среднем 1 токен ≈ 4 символа.
-        # Это не замена tiktoken для production-метрик, но позволяет
-        # сервису и unit-тестам работать офлайн.
         return max(1, len(text) // 4)
 
 
 def count_tokens(messages: list[ChatCompletionMessage]) -> int:
-    """
-    Примерная оценка количества токенов в ChatML-формате.
-
-    +4 на каждое сообщение и +2 итогово — простая поправка на служебные
-    токены формата чата.
-    """
     total = 2
 
     for message in messages:
         total += 4
-        total += _count_text_tokens(message["role"])
-        total += _count_text_tokens(message["content"])
+        total += _count_text_tokens(str(message.get("role", "")))
+        total += _count_text_tokens(
+            _content_to_text_for_token_count(message.get("content", ""))
+        )
 
     return total
 
@@ -59,67 +66,76 @@ def fit_to_budget(
     messages: list[ChatCompletionMessage],
     budget: int,
 ) -> list[ChatCompletionMessage]:
-    """
-    Обрезает историю с начала, сохраняя system-сообщение, если оно есть.
-    """
     if count_tokens(messages) <= budget:
         return messages
 
-    if messages and messages[0]["role"] == "system":
+    system_message: ChatCompletionMessage | None = None
+    history = messages
+
+    if messages and messages[0].get("role") == "system":
         system_message = messages[0]
         history = messages[1:]
-    else:
-        system_message = None
-        history = messages
 
-    while history:
-        candidate = [*history]
-
-        if system_message is not None:
-            candidate = [system_message, *candidate]
-
-        if count_tokens(candidate) <= budget:
-            return candidate
-
+    while history and count_tokens(
+        ([system_message] if system_message else []) + history
+    ) > budget:
         history = history[1:]
 
-    return [system_message] if system_message is not None else []
+    if system_message is not None:
+        return [system_message] + history
+
+    return history
 
 
-def _extract_delta_content(chunk: object) -> str:
-    """
-    Достаёт текстовый delta-content из chunk OpenAI-compatible stream.
-    """
+def _extract_delta_content(chunk: Any) -> str:
     if isinstance(chunk, dict):
         choices = chunk.get("choices") or []
-
         if not choices:
             return ""
 
         delta = choices[0].get("delta") or {}
-
         return delta.get("content") or ""
 
-    choices = getattr(chunk, "choices", None)
-
+    choices = getattr(chunk, "choices", None) or []
     if not choices:
         return ""
 
     delta = getattr(choices[0], "delta", None)
+    return getattr(delta, "content", None) or ""
 
-    if delta is None:
-        return ""
 
-    content = getattr(delta, "content", None)
+def _message_to_completion_message(
+    message: ChatMessage,
+) -> ChatCompletionMessage:
+    content: Any = message.content
 
-    return content or ""
+    media_part = None
+
+    if message.media_refs:
+        candidate = message.media_refs.get("part")
+        if isinstance(candidate, dict):
+            media_part = candidate
+
+    if media_part is not None and message.role == "user":
+        content = [
+            {
+                "type": "text",
+                "text": message.content or "[медиа]",
+            },
+            media_part,
+        ]
+
+    return {
+        "role": message.role,
+        "content": content,
+    }
 
 
 class ChatService:
     def __init__(
         self,
         repository: ChatRepository,
-        llm_client,
+        llm_client: Any,
         default_model: str = "llama3.2",
         context_window: int = 10,
     ) -> None:
@@ -148,14 +164,20 @@ class ChatService:
         chat_id: UUID,
         limit: int = 50,
     ) -> list[ChatMessage]:
-        return await self.repository.list_messages(chat_id, limit=limit)
+        return await self.repository.list_messages(
+            chat_id=chat_id,
+            limit=limit,
+        )
 
     async def clear_history(self, chat_id: UUID) -> None:
         await self.repository.soft_delete_messages(chat_id)
 
-    async def _build_messages(self, chat: Chat) -> list[ChatCompletionMessage]:
+    async def _build_messages(
+        self,
+        chat: Chat,
+    ) -> list[ChatCompletionMessage]:
         history = await self.repository.list_messages(
-            chat.id,
+            chat_id=chat.id,
             limit=self.context_window,
         )
 
@@ -169,35 +191,40 @@ class ChatService:
                 }
             )
 
-        for message in history:
-            messages.append(
-                {
-                    "role": message.role,
-                    "content": message.content,
-                }
-            )
+        messages.extend(
+            _message_to_completion_message(message)
+            for message in history
+        )
 
         budget = CONTEXT_WINDOW_TOKENS - RESPONSE_TOKENS - SAFETY_MARGIN
 
-        return fit_to_budget(messages, budget)
+        return fit_to_budget(
+            messages=messages,
+            budget=budget,
+        )
 
     async def send_message(
         self,
         chat_id: UUID,
         user_content: str,
+        media_refs: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
         chat = await self.repository.get_chat(chat_id)
 
         if chat is None:
             raise ValueError(f"Chat not found: {chat_id}")
 
-        user_message = ChatMessage(
-            chat_id=chat_id,
-            role="user",
-            content=user_content,
-        )
+        visible_content = user_content.strip() or "[медиа]"
 
-        await self.repository.append_message(chat_id, user_message)
+        await self.repository.append_message(
+            chat_id,
+            ChatMessage(
+                chat_id=chat_id,
+                role="user",
+                content=visible_content,
+                media_refs=media_refs,
+            ),
+        )
 
         messages = await self._build_messages(chat)
 
@@ -207,7 +234,7 @@ class ChatService:
             stream=True,
         )
 
-        assistant_parts: list[str] = []
+        assistant_chunks: list[str] = []
 
         try:
             async for chunk in stream:
@@ -216,10 +243,10 @@ class ChatService:
                 if not content:
                     continue
 
-                assistant_parts.append(content)
+                assistant_chunks.append(content)
                 yield content
         finally:
-            assistant_content = "".join(assistant_parts)
+            assistant_content = "".join(assistant_chunks)
 
             if assistant_content:
                 await self.repository.append_message(
@@ -234,5 +261,5 @@ class ChatService:
                 logger.info(
                     "chat_assistant_message_saved",
                     chat_id=str(chat_id),
-                    content_length=len(assistant_content),
+                    chars=len(assistant_content),
                 )

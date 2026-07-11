@@ -14,7 +14,7 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-async def test_get_or_create_chat_returns_uuid_and_is_idempotent() -> None:
+async def test_get_or_create_chat_returns_uuid_and_uses_cache() -> None:
     chat_id = UUID("11111111-1111-1111-1111-111111111111")
     requests: list[httpx.Request] = []
 
@@ -25,7 +25,7 @@ async def test_get_or_create_chat_returns_uuid_and_is_idempotent() -> None:
         assert request.url.path == "/chats"
 
         return httpx.Response(
-            200,
+            status_code=200,
             json={
                 "chat_id": str(chat_id),
             },
@@ -37,40 +37,46 @@ async def test_get_or_create_chat_returns_uuid_and_is_idempotent() -> None:
         transport=transport,
         base_url="http://backend",
     ) as http_client:
-        client = BackendClient(
+        backend = BackendClient(
             backend_url="http://backend",
             client=http_client,
         )
 
-        first_result = await client.get_or_create_chat(
-            owner_external_id="123",
+        first = await backend.get_or_create_chat(
+            owner_external_id="telegram:1",
             interface="telegram",
         )
-        second_result = await client.get_or_create_chat(
-            owner_external_id="123",
+        second = await backend.get_or_create_chat(
+            owner_external_id="telegram:1",
             interface="telegram",
         )
 
-    assert first_result == chat_id
-    assert second_result == chat_id
+    assert first == chat_id
+    assert second == chat_id
     assert len(requests) == 1
 
 
-async def test_send_message_parses_sse_stream() -> None:
+async def test_send_message_parses_json_sse_tokens() -> None:
     chat_id = UUID("22222222-2222-2222-2222-222222222222")
 
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.url.path == f"/chats/{chat_id}/messages"
+        assert request.headers["content-type"].startswith(
+            "application/x-www-form-urlencoded"
+        )
+
+        body = await request.aread()
+        assert b"content=hello" in body
 
         return httpx.Response(
-            200,
+            status_code=200,
             content=(
-                "data: При\n\n"
-                "data: вет\n\n"
-                "data: !\n\n"
-                "data: [DONE]\n\n"
-            ).encode("utf-8"),
+                b'data: {"type":"token","delta":"Pri"}\n\n'
+                b'data: {"type":"token","delta":"vet"}\n\n'
+                b'data: {"type":"token","delta":"!"}\n\n'
+                b'data: {"type":"done"}\n\n'
+            ),
             headers={
                 "content-type": "text/event-stream",
             },
@@ -82,36 +88,48 @@ async def test_send_message_parses_sse_stream() -> None:
         transport=transport,
         base_url="http://backend",
     ) as http_client:
-        client = BackendClient(
+        backend = BackendClient(
             backend_url="http://backend",
             client=http_client,
         )
 
         chunks = [
             chunk
-            async for chunk in client.send_message(
+            async for chunk in backend.send_message(
                 chat_id=chat_id,
-                content="Привет",
+                content="hello",
             )
         ]
 
-    assert chunks == ["При", "вет", "!"]
+    assert chunks == ["Pri", "vet", "!"]
 
 
-async def test_clear_messages_sends_delete_to_backend() -> None:
+async def test_send_message_with_media_sends_multipart_request() -> None:
     chat_id = UUID("33333333-3333-3333-3333-333333333333")
-    requests: list[httpx.Request] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-
-        assert request.method == "DELETE"
+        assert request.method == "POST"
         assert request.url.path == f"/chats/{chat_id}/messages"
+        assert request.headers["content-type"].startswith(
+            "multipart/form-data"
+        )
+
+        body = await request.aread()
+
+        assert b'name="content"' in body
+        assert b"check this file" in body
+        assert b'name="media"' in body
+        assert b'filename="file.bin"' in body
+        assert b"fake-media-bytes" in body
 
         return httpx.Response(
-            200,
-            json={
-                "status": "ok",
+            status_code=200,
+            content=(
+                b'data: {"type":"token","delta":"ok"}\n\n'
+                b'data: {"type":"done"}\n\n'
+            ),
+            headers={
+                "content-type": "text/event-stream",
             },
         )
 
@@ -121,11 +139,47 @@ async def test_clear_messages_sends_delete_to_backend() -> None:
         transport=transport,
         base_url="http://backend",
     ) as http_client:
-        client = BackendClient(
+        backend = BackendClient(
             backend_url="http://backend",
             client=http_client,
         )
 
-        await client.clear_messages(chat_id)
+        chunks = [
+            chunk
+            async for chunk in backend.send_message(
+                chat_id=chat_id,
+                content="check this file",
+                media=b"fake-media-bytes",
+                mime="image/png",
+            )
+        ]
+
+    assert chunks == ["ok"]
+
+
+async def test_clear_messages_sends_delete_request() -> None:
+    chat_id = UUID("44444444-4444-4444-4444-444444444444")
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+
+        assert request.method == "DELETE"
+        assert request.url.path == f"/chats/{chat_id}/messages"
+
+        return httpx.Response(status_code=200, json={"status": "ok"})
+
+    transport = httpx.MockTransport(handler)
+
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://backend",
+    ) as http_client:
+        backend = BackendClient(
+            backend_url="http://backend",
+            client=http_client,
+        )
+
+        await backend.clear_messages(chat_id)
 
     assert len(requests) == 1

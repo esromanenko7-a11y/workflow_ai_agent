@@ -1,6 +1,6 @@
 ﻿from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,9 +11,7 @@ class BotSettings(BaseSettings):
         extra="ignore",
     )
 
-    bot_token: str = Field(
-        validation_alias="BOT_TOKEN",
-    )
+    bot_token: str = Field(validation_alias="BOT_TOKEN")
     backend_url: str = Field(
         default="http://127.0.0.1:8001",
         validation_alias="BACKEND_URL",
@@ -29,6 +27,13 @@ class BotSettings(BaseSettings):
     bot_verify_ssl: bool = Field(
         default=True,
         validation_alias="BOT_VERIFY_SSL",
+    )
+    internal_token: SecretStr = Field(
+        validation_alias="INTERNAL_TOKEN",
+    )
+    bot_api_port: int = Field(
+        default=9000,
+        validation_alias="BOT_API_PORT",
     )
 
 
