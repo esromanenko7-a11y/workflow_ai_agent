@@ -85,7 +85,12 @@ async def test_service_saves_media_refs_and_builds_content_parts(repository):
         )
     ]
 
-    assert chunks == ["ok"]
+    assert chunks[0] == {
+        "type": "token",
+        "delta": "ok",
+    }
+    assert chunks[1]["type"] == "done"
+    assert "message_id" in chunks[1]
 
     saved_messages = await repository.list_messages(chat.id)
     assert saved_messages[0].role == "user"

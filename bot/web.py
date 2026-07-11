@@ -2,6 +2,7 @@
 import time
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 from aiogram import Bot
 from aiogram.enums import ChatAction
@@ -14,6 +15,13 @@ from pydantic import BaseModel
 MAX_TELEGRAM_TEXT_LENGTH = 4096
 DRAFT_SAFE_LIMIT = 3900
 DRAFT_UPDATE_INTERVAL_SECONDS = 2.0
+
+
+@dataclass
+class StreamResult:
+    text: str
+    backend_message_id: str | None = None
+
 
 
 class NotifyRequest(BaseModel):
@@ -52,7 +60,7 @@ def build_api(
     return api
 
 
-def _draft_text(text: str) -> str:
+def _draft_text(text: str) -> StreamResult:
     if len(text) <= DRAFT_SAFE_LIMIT:
         return text
 
@@ -85,7 +93,7 @@ async def _safe_send_message_draft(
 
 async def stream_to_chat(
     message: Message,
-    tokens: AsyncIterator[str],
+    tokens: AsyncIterator[dict],
 ) -> str:
     """
     Показывает streaming-ответ через Telegram sendMessageDraft.
@@ -103,7 +111,19 @@ async def stream_to_chat(
         action=ChatAction.TYPING,
     )
 
-    async for delta in tokens:
+    backend_message_id = None
+
+    async for event in tokens:
+        event_type = event.get("type")
+
+        if event_type == "done":
+            backend_message_id = event.get("message_id")
+            continue
+
+        if event_type != "token":
+            continue
+
+        delta = event.get("delta", "")
         buffer += delta
 
         if not buffer.strip():
@@ -123,7 +143,7 @@ async def stream_to_chat(
             chat_id=message.chat.id,
             text="Backend вернул пустой ответ.",
         )
-        return buffer
+        return StreamResult(text=buffer, backend_message_id=backend_message_id)
 
     # Один финальный draft-update перед обычным сообщением.
     # Если Telegram не даст обновить draft — не страшно,
@@ -139,11 +159,11 @@ async def stream_to_chat(
             chat_id=message.chat.id,
             text=buffer,
         )
-        return buffer
+        return StreamResult(text=buffer, backend_message_id=backend_message_id)
 
     await message.bot.send_message(
         chat_id=message.chat.id,
         text=buffer[:MAX_TELEGRAM_TEXT_LENGTH],
     )
 
-    return buffer
+    return StreamResult(text=buffer, backend_message_id=backend_message_id)

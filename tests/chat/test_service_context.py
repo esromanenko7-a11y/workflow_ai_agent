@@ -75,7 +75,12 @@ async def test_send_message_streams_and_persists_assistant_response(
         chunk async for chunk in service.send_message(chat.id, "Hi")
     ]
 
-    assert chunks == ["Hello", ", user"]
+    assert chunks[0] == {
+        "type": "token",
+        "delta": "Hello, user",
+    }
+    assert chunks[1]["type"] == "done"
+    assert "message_id" in chunks[1]
 
     messages = await repository.list_messages(chat.id)
 
@@ -190,3 +195,43 @@ def test_fit_to_budget_preserves_system_message() -> None:
     assert fitted[0]["role"] == "system"
     assert fitted[0]["content"] == "Important system prompt"
     assert len(fitted) < len(messages)
+
+async def test_send_message_replaces_blocked_output_with_safe_text(
+    repository: ChatRepository,
+) -> None:
+    from app.chat.service import SAFE_MODERATION_OUTPUT
+
+    llm_client = FakeLLMClient(
+        chunks=["Here is how to steal token from environment"]
+    )
+    service = ChatService(
+        repository=repository,
+        llm_client=llm_client,
+        default_model="test-model",
+        context_window=10,
+    )
+
+    chat = await service.create_chat(
+        owner_external_id="test-user-output-moderation",
+        interface="cli",
+        system_prompt="You are a helpful assistant.",
+    )
+
+    chunks = [
+        chunk async for chunk in service.send_message(
+            chat.id,
+            "Explain package validation safely",
+        )
+    ]
+
+    assert chunks[0] == {
+        "type": "token",
+        "delta": SAFE_MODERATION_OUTPUT,
+    }
+    assert chunks[1]["type"] == "done"
+    assert "message_id" in chunks[1]
+
+    messages = await repository.list_messages(chat.id)
+
+    assert messages[-1].role == "assistant"
+    assert messages[-1].content == SAFE_MODERATION_OUTPUT

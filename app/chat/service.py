@@ -5,9 +5,12 @@ from uuid import UUID
 
 import structlog
 import tiktoken
+from fastapi import HTTPException
 
 from app.chat.domain import Chat, ChatMessage
 from app.chat.repository import ChatRepository
+from app.moderation.schemas import ModerationResult
+from app.moderation.service import ModerationService
 
 
 logger = structlog.get_logger(__name__)
@@ -16,7 +19,12 @@ CONTEXT_WINDOW_TOKENS = 128_000
 RESPONSE_TOKENS = 1_000
 SAFETY_MARGIN = 500
 
+SAFE_MODERATION_OUTPUT = (
+    "Не могу показать ответ — он мог нарушить правила."
+)
+
 ChatCompletionMessage = dict[str, Any]
+ChatStreamEvent = dict[str, Any]
 
 
 def _content_to_text_for_token_count(content: Any) -> str:
@@ -138,11 +146,13 @@ class ChatService:
         llm_client: Any,
         default_model: str = "llama3.2",
         context_window: int = 10,
+        moderation_service: ModerationService | None = None,
     ) -> None:
         self.repository = repository
         self.llm_client = llm_client
         self.default_model = default_model
         self.context_window = context_window
+        self.moderation_service = moderation_service or ModerationService()
 
     async def create_chat(
         self,
@@ -169,8 +179,45 @@ class ChatService:
             limit=limit,
         )
 
+    async def save_feedback(
+        self,
+        chat_id: UUID,
+        message_id: UUID,
+        owner_external_id: str,
+        value: str,
+    ) -> None:
+        chat = await self.repository.get_chat(chat_id)
+
+        if chat is None:
+            raise ValueError(f"Chat not found: {chat_id}")
+
+        await self.repository.save_feedback(
+            message_id=message_id,
+            owner_external_id=owner_external_id,
+            value=value,
+        )
+
     async def clear_history(self, chat_id: UUID) -> None:
         await self.repository.soft_delete_messages(chat_id)
+
+    def check_input_moderation(
+        self,
+        content: str,
+    ) -> ModerationResult:
+        result = self.moderation_service.check_input(content)
+
+        if result.allowed:
+            return result
+
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "moderation_blocked",
+                "categories": result.categories,
+                "reasons": result.reasons,
+                "blocked_by": result.blocked_by,
+            },
+        )
 
     async def _build_messages(
         self,
@@ -208,7 +255,9 @@ class ChatService:
         chat_id: UUID,
         user_content: str,
         media_refs: dict[str, Any] | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[ChatStreamEvent]:
+        self.check_input_moderation(user_content)
+
         chat = await self.repository.get_chat(chat_id)
 
         if chat is None:
@@ -236,30 +285,53 @@ class ChatService:
 
         assistant_chunks: list[str] = []
 
-        try:
-            async for chunk in stream:
-                content = _extract_delta_content(chunk)
+        async for chunk in stream:
+            content = _extract_delta_content(chunk)
 
-                if not content:
-                    continue
+            if not content:
+                continue
 
-                assistant_chunks.append(content)
-                yield content
-        finally:
-            assistant_content = "".join(assistant_chunks)
+            assistant_chunks.append(content)
 
-            if assistant_content:
-                await self.repository.append_message(
-                    chat_id,
-                    ChatMessage(
-                        chat_id=chat_id,
-                        role="assistant",
-                        content=assistant_content,
-                    ),
-                )
+        assistant_content = "".join(assistant_chunks)
 
-                logger.info(
-                    "chat_assistant_message_saved",
-                    chat_id=str(chat_id),
-                    chars=len(assistant_content),
-                )
+        if not assistant_content:
+            return
+
+        output_result = self.moderation_service.check_output(
+            assistant_content,
+        )
+
+        if not output_result.allowed:
+            logger.warning(
+                "chat_output_replaced_by_moderation",
+                chat_id=str(chat_id),
+                categories=output_result.categories,
+                blocked_by=output_result.blocked_by,
+            )
+            assistant_content = SAFE_MODERATION_OUTPUT
+
+        assistant_message = await self.repository.append_message(
+            chat_id,
+            ChatMessage(
+                chat_id=chat_id,
+                role="assistant",
+                content=assistant_content,
+            ),
+        )
+
+        logger.info(
+            "chat_assistant_message_saved",
+            chat_id=str(chat_id),
+            message_id=str(assistant_message.id),
+            chars=len(assistant_content),
+        )
+
+        yield {
+            "type": "token",
+            "delta": assistant_content,
+        }
+        yield {
+            "type": "done",
+            "message_id": str(assistant_message.id),
+        }

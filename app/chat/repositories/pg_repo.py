@@ -1,10 +1,11 @@
 ﻿from uuid import UUID
 
 from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat.domain import Chat, ChatMessage
-from app.chat.repositories.pg_models import ChatMessageRow, ChatRow
+from app.chat.repositories.pg_models import ChatMessageRow, ChatRow, MessageFeedbackRow
 
 
 class PostgresChatRepository:
@@ -85,6 +86,31 @@ class PostgresChatRepository:
             ChatMessage.model_validate(row, from_attributes=True)
             for row in rows
         ]
+
+    async def save_feedback(
+        self,
+        message_id: UUID,
+        owner_external_id: str,
+        value: str,
+    ) -> None:
+        statement = (
+            insert(MessageFeedbackRow)
+            .values(
+                message_id=message_id,
+                owner_external_id=owner_external_id,
+                value=value,
+            )
+            .on_conflict_do_update(
+                constraint="uq_message_feedback_owner_message",
+                set_={
+                    "value": value,
+                    "created_at": func.now(),
+                },
+            )
+        )
+
+        await self.session.execute(statement)
+        await self.session.commit()
 
     async def soft_delete_messages(self, chat_id: UUID) -> None:
         statement = (

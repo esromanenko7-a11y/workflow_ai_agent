@@ -5,6 +5,7 @@ from aiogram import F, Router
 from aiogram.types import Document, Message
 
 from bot.handlers.common import backend_error_text, get_user_chat_id
+from bot.keyboards.feedback import feedback_kb
 from bot.services.backend_client import BackendClient
 from bot.web import stream_to_chat
 
@@ -52,10 +53,16 @@ async def _send_media_to_backend(
         mime=mime,
     )
 
-    await stream_to_chat(
+    result = await stream_to_chat(
         message=message,
         tokens=tokens,
     )
+
+    if result.backend_message_id:
+        await message.answer(
+            "??????? ?????:",
+            reply_markup=feedback_kb(result.backend_message_id),
+        )
 
 
 def _document_mime(document: Document) -> str:

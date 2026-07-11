@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.chat.deps import get_chat_service
 from app.chat.domain import Chat, ChatMessage
+from app.chat.feedback import FeedbackIn, FeedbackOut
 from app.chat.media import media_to_part
 from app.chat.service import ChatService
 
@@ -110,29 +111,46 @@ async def send_message(
             "part": media_part,
         }
 
+    chat_service.check_input_moderation(content)
+
     async def event_stream():
-        async for chunk in chat_service.send_message(
+        async for event in chat_service.send_message(
             chat_id=chat_id,
             user_content=content,
             media_refs=media_refs,
         ):
-            payload = {
-                "type": "token",
-                "delta": chunk,
-            }
-
-            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-        done_payload = {
-            "type": "done",
-        }
-
-        yield f"data: {json.dumps(done_payload, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
     )
+
+
+@router.post(
+    "/{chat_id}/messages/{message_id}/feedback",
+)
+async def save_message_feedback(
+    chat_id: UUID,
+    message_id: UUID,
+    payload: FeedbackIn,
+    owner_external_id: str = Query(..., min_length=1),
+    chat_service: ChatService = Depends(get_chat_service),
+) -> FeedbackOut:
+    try:
+        await chat_service.save_feedback(
+            chat_id=chat_id,
+            message_id=message_id,
+            owner_external_id=owner_external_id,
+            value=payload.value,
+        )
+    except ValueError as error:
+        raise HTTPException(
+            status_code=404,
+            detail=str(error),
+        ) from error
+
+    return FeedbackOut()
 
 
 @router.delete("/{chat_id}/messages")

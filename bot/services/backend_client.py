@@ -69,7 +69,7 @@ class BackendClient:
         content: str,
         media: bytes | None = None,
         mime: str | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[dict]:
         data = {
             "content": content,
         }
@@ -104,13 +104,28 @@ class BackendClient:
                     continue
 
                 payload = json.loads(raw_payload)
+                yield payload
 
-                if payload["type"] == "token":
-                    yield payload["delta"]
-                    continue
-
-                if payload["type"] == "done":
+                if payload.get("type") == "done":
                     return
+
+    async def save_feedback(
+        self,
+        chat_id: UUID | str,
+        message_id: UUID | str,
+        owner_external_id: str,
+        value: str,
+    ) -> None:
+        response = await self.http.post(
+            f"/chats/{chat_id}/messages/{message_id}/feedback",
+            params={
+                "owner_external_id": owner_external_id,
+            },
+            json={
+                "value": value,
+            },
+        )
+        response.raise_for_status()
 
     async def clear_messages(
         self,

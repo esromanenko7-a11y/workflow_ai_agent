@@ -101,7 +101,12 @@ async def test_send_message_parses_json_sse_tokens() -> None:
             )
         ]
 
-    assert chunks == ["Pri", "vet", "!"]
+    assert chunks == [
+        {"type": "token", "delta": "Pri"},
+        {"type": "token", "delta": "vet"},
+        {"type": "token", "delta": "!"},
+        {"type": "done"},
+    ]
 
 
 async def test_send_message_with_media_sends_multipart_request() -> None:
@@ -154,7 +159,10 @@ async def test_send_message_with_media_sends_multipart_request() -> None:
             )
         ]
 
-    assert chunks == ["ok"]
+    assert chunks == [
+        {"type": "token", "delta": "ok"},
+        {"type": "done"},
+    ]
 
 
 async def test_clear_messages_sends_delete_request() -> None:
@@ -183,3 +191,37 @@ async def test_clear_messages_sends_delete_request() -> None:
         await backend.clear_messages(chat_id)
 
     assert len(requests) == 1
+
+async def test_save_feedback_sends_post_request() -> None:
+    chat_id = UUID("55555555-5555-5555-5555-555555555555")
+    message_id = UUID("66666666-6666-6666-6666-666666666666")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == (
+            f"/chats/{chat_id}/messages/{message_id}/feedback"
+        )
+        assert request.url.params["owner_external_id"] == "telegram:123"
+
+        body = await request.aread()
+        assert b'"value":"up"' in body
+
+        return httpx.Response(status_code=200, json={"status": "ok"})
+
+    transport = httpx.MockTransport(handler)
+
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://backend",
+    ) as http_client:
+        backend = BackendClient(
+            backend_url="http://backend",
+            client=http_client,
+        )
+
+        await backend.save_feedback(
+            chat_id=chat_id,
+            message_id=message_id,
+            owner_external_id="telegram:123",
+            value="up",
+        )

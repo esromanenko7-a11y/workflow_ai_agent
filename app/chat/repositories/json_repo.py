@@ -135,6 +135,52 @@ class JsonChatRepository:
 
         return messages[-limit:]
 
+    async def save_feedback(
+        self,
+        message_id: UUID,
+        owner_external_id: str,
+        value: str,
+    ) -> None:
+        feedback_path = self.storage_dir / "message_feedback.jsonl"
+
+        record = {
+            "message_id": str(message_id),
+            "owner_external_id": owner_external_id,
+            "value": value,
+        }
+
+        lines: list[str] = []
+
+        if feedback_path.exists():
+            lines = feedback_path.read_text(
+                encoding="utf-8",
+            ).splitlines()
+
+        filtered_lines = []
+
+        for line in lines:
+            if not line.strip():
+                continue
+
+            item = json.loads(line)
+
+            if (
+                item.get("message_id") == str(message_id)
+                and item.get("owner_external_id") == owner_external_id
+            ):
+                continue
+
+            filtered_lines.append(line)
+
+        filtered_lines.append(
+            json.dumps(record, ensure_ascii=False)
+        )
+
+        feedback_path.write_text(
+            "\n".join(filtered_lines) + "\n",
+            encoding="utf-8",
+        )
+
     async def soft_delete_messages(self, chat_id: UUID) -> None:
         chat_dir = self._chat_dir(chat_id)
         chat_dir.mkdir(parents=True, exist_ok=True)
