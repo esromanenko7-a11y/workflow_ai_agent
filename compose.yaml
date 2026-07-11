@@ -1,4 +1,4 @@
-services:
+﻿services:
   app:
     image: llm-service:v1
     build:
@@ -11,9 +11,12 @@ services:
     environment:
       OPENAI_BASE_URL: http://host.docker.internal:11434/v1
       REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+asyncpg://app:app@postgres:5432/app
       PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:6006
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
       phoenix:
         condition: service_started
@@ -44,6 +47,23 @@ services:
       retries: 3
     restart: unless-stopped
 
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   phoenix:
     image: arizephoenix/phoenix:latest
     ports:
@@ -57,4 +77,5 @@ services:
 
 volumes:
   redis_data: {}
+  postgres_data: {}
   phoenix_data: {}

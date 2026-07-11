@@ -50,6 +50,10 @@ class Settings(BaseSettings):
         default="redis://localhost:6379/0",
         validation_alias="REDIS_URL",
     )
+    database_url: str = Field(
+        default="postgresql+asyncpg://app:app@localhost:5432/app",
+        validation_alias="DATABASE_URL",
+    )
     cache_ttl_seconds: int = Field(
         default=3600,
         validation_alias="CACHE_TTL_SECONDS",
