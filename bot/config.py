@@ -22,6 +22,14 @@ class BotSettings(BaseSettings):
         default_factory=list,
         validation_alias="BOT_ADMIN_IDS",
     )
+    bot_proxy: str | None = Field(
+        default=None,
+        validation_alias="BOT_PROXY",
+    )
+    bot_verify_ssl: bool = Field(
+        default=True,
+        validation_alias="BOT_VERIFY_SSL",
+    )
 
 
 @lru_cache

@@ -24,7 +24,13 @@ class BackendClient:
         if client is None:
             self._client = httpx.AsyncClient(
                 base_url=self.backend_url,
-                timeout=timeout,
+                timeout=httpx.Timeout(
+                    connect=10.0,
+                    read=None,
+                    write=10.0,
+                    pool=10.0,
+                ),
+                trust_env=False,
             )
             self._owns_client = True
         else:
