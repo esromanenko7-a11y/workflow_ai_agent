@@ -8,3 +8,7 @@ logs/
 # Runtime chat storage
 var/
 tmp/
+
+.cache/
+app/data/vector_documents.json
+compose.yaml.before-qdrant

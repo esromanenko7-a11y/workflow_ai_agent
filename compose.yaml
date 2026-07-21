@@ -27,6 +27,10 @@
     environment:
       OPENAI_BASE_URL: http://host.docker.internal:11434/v1
       REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION}
+      EMBEDDING_DIM: ${EMBEDDING_DIM}
       DATABASE_URL: postgresql+asyncpg://app:app@postgres:5432/app
       CHAT_REPOSITORY: postgres
       BOT_URL: http://bot:9000
@@ -34,6 +38,8 @@
     depends_on:
       redis:
         condition: service_healthy
+      qdrant:
+        condition: service_started
       postgres:
         condition: service_healthy
       migrate:
@@ -55,6 +61,7 @@
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
 
   bot:
     image: llm-service:v1
@@ -81,6 +88,19 @@
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  qdrant:
+    image: qdrant/qdrant:v1.18.0
+
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
+
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    restart: unless-stopped
   redis:
     image: redis:7.4-alpine
     volumes:
@@ -124,3 +144,4 @@ volumes:
   pg-data: {}
   redis_data: {}
   phoenix_data: {}
+  qdrant_storage: {}

@@ -58,6 +58,28 @@ class Settings(BaseSettings):
         default=3600,
         validation_alias="CACHE_TTL_SECONDS",
     )
+    qdrant_url: str = Field(
+        default="http://localhost:6333",
+        validation_alias="QDRANT_URL",
+    )
+    qdrant_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="QDRANT_API_KEY",
+    )
+    qdrant_collection: str = Field(
+        default="documents",
+        validation_alias="QDRANT_COLLECTION",
+    )
+    embedding_model: str = Field(
+        default="intfloat/multilingual-e5-small",
+        validation_alias="EMBEDDING_MODEL",
+    )
+    embedding_dim: int = Field(
+        default=384,
+        gt=0,
+        validation_alias="EMBEDDING_DIM",
+    )
+
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000"],
         validation_alias="CORS_ORIGINS",

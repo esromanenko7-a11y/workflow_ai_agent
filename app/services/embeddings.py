@@ -1,4 +1,5 @@
-﻿import hashlib
+﻿from app.core.config import get_settings
+import hashlib
 import json
 import os
 import time
@@ -29,10 +30,11 @@ class EmbeddingService:
         batch_size: int = DEFAULT_BATCH_SIZE,
         cache_dir: str | Path | None = None,
     ) -> None:
+        settings = get_settings()
+
         self.model_name = (
-            model_name
-            or os.getenv("EMBEDDING_MODEL")
-            or DEFAULT_MODEL_NAME
+                model_name
+                or settings.embedding_model
         )
         self.batch_size = int(
             os.getenv(
