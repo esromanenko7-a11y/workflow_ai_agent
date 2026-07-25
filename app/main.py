@@ -2,6 +2,7 @@ import structlog
 from structlog.contextvars import bind_contextvars, clear_contextvars
 from app.admin.routes import router as admin_router
 from app.chat.routes import router as chats_router
+from app.routers.rag import router as rag_router
 from app.observability.logging import setup_logging
 import time
 import uuid
@@ -24,6 +25,7 @@ from app.routers.models import router as models_router
 
 from app.observability.tracing import setup_tracing
 
+from app.services.rag import RAGService
 
 settings = get_settings()
 setup_logging(settings.log_level)
@@ -49,8 +51,6 @@ async def lifespan(app: FastAPI):
         timeout=settings.llm.request_timeout,
     )
 
-
-
     app.state.openai_client = AsyncOpenAI(
         api_key=settings.llm.openai_api_key.get_secret_value(),
         base_url=settings.llm.openai_base_url,
@@ -58,7 +58,8 @@ async def lifespan(app: FastAPI):
         http_client=app.state.http_client,
     )
 
-    # Redis-кеш не должен блокировать основной сценарий, поэтому ставим короткие timeout.
+    # Redis-кеш не должен блокировать основной сценарий,
+    # поэтому ставим короткие timeout.
     app.state.cache = Redis.from_url(
         settings.redis_url,
         encoding="utf-8",
@@ -67,16 +68,29 @@ async def lifespan(app: FastAPI):
         socket_timeout=1,
     )
 
+    # Инициализируем RAG один раз при старте приложения.
+    app.state.rag_service = RAGService()
+    app.state.rag_service.build()
+
     try:
         yield
+
     finally:
         logger.info("service_stopping")
 
-        await app.state.openai_client.close()
+        # Закрываем соединение RAGService с Qdrant.
+        if getattr(app.state, "rag_service", None) is not None:
+            app.state.rag_service.close()
 
+        # Закрываем OpenAI-клиент.
+        if getattr(app.state, "openai_client", None) is not None:
+            await app.state.openai_client.close()
+
+        # Закрываем общий HTTP-клиент.
         if getattr(app.state, "http_client", None) is not None:
             await app.state.http_client.aclose()
 
+        # Закрываем Redis.
         if getattr(app.state, "cache", None) is not None:
             await app.state.cache.aclose()
 
@@ -193,5 +207,6 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(models_router)
 app.include_router(llm_chat_router)
+app.include_router(rag_router)
 app.include_router(admin_router)
 app.include_router(chats_router)

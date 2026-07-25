@@ -5,14 +5,11 @@ import asyncio
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, VectorParams
 
-from app.config import (
-    EMBEDDING_DIM,
-    QDRANT_API_KEY,
-    QDRANT_COLLECTION,
-    QDRANT_URL,
-)
+from app.core.config import get_settings
 
 DOT_COLLECTION = "documents_dot"
+settings = get_settings()
+
 QUERIES = [
     "Ошибка разархивирования пакета",
     "В meta-файле отсутствуют обязательные технические поля",
@@ -35,8 +32,12 @@ async def search_ids(
     return [str(point.id) for point in result.points]
 async def main() -> None:
     client = AsyncQdrantClient(
-        url=QDRANT_URL,
-        api_key=QDRANT_API_KEY,
+        url=settings.qdrant_url,
+        api_key=(
+            settings.qdrant_api_key.get_secret_value()
+            if settings.qdrant_api_key
+            else None
+        ),
     )
 
     collections = await client.get_collections()
@@ -50,7 +51,7 @@ async def main() -> None:
         await client.create_collection(
             collection_name=DOT_COLLECTION,
             vectors_config=VectorParams(
-                size=EMBEDDING_DIM,
+                size=settings.embedding_dim,
                 distance=Distance.DOT,
             ),
         )
@@ -63,7 +64,7 @@ async def main() -> None:
 
     while True:
         points, offset = await client.scroll(
-            collection_name=QDRANT_COLLECTION,
+            collection_name=settings.qdrant_collection,
             limit=100,
             offset=offset,
             with_vectors=True,
@@ -104,7 +105,7 @@ async def main() -> None:
 
         cosine_ids = await search_ids(
             client=client,
-            collection_name=QDRANT_COLLECTION,
+            collection_name=settings.qdrant_collection,
             query_vector=query_vector,
         )
 

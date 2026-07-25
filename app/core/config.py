@@ -11,25 +11,38 @@ ENV_FILE = PROJECT_ROOT / ".env"
 
 
 class LLMSettings(BaseSettings):
-    openai_api_key: SecretStr = Field(validation_alias="OPENAI_API_KEY")
+    openai_api_key: SecretStr = Field(
+        validation_alias="OPENAI_API_KEY",
+    )
+
     openai_base_url: str = Field(
         default="http://localhost:11434/v1",
         validation_alias="OPENAI_BASE_URL",
     )
+
+    ollama_base_url: str = Field(
+        default="http://localhost:11434",
+        validation_alias="OLLAMA_BASE_URL",
+    )
+
     default_model: str = Field(
-        default="llama3.2",
+        default="llama3.2:latest",
         validation_alias="DEFAULT_MODEL",
     )
+
     request_timeout: float = Field(
-        default=30.0,
+        default=120.0,
+        gt=0,
         validation_alias="REQUEST_TIMEOUT",
     )
+
     max_retries: int = Field(
         default=2,
         ge=0,
         le=10,
         validation_alias="LLM_MAX_RETRIES",
     )
+
     retry_base_delay_seconds: float = Field(
         default=0.5,
         ge=0,
@@ -79,7 +92,33 @@ class Settings(BaseSettings):
         gt=0,
         validation_alias="EMBEDDING_DIM",
     )
-
+    rag_collection: str = Field(
+        default="rag_block_03",
+        validation_alias="RAG_COLLECTION",
+    )
+    rag_baremetal_collection: str = Field(
+        default="rag_baremetal_block_03",
+        validation_alias="RAG_BAREMETAL_COLLECTION",
+    )
+    rag_data_dir: Path = Field(
+        default=Path("./data/rag-block-03"),
+        validation_alias="RAG_DATA_DIR",
+    )
+    rag_chunk_size: int = Field(
+        default=512,
+        gt=0,
+        validation_alias="RAG_CHUNK_SIZE",
+    )
+    rag_chunk_overlap: int = Field(
+        default=64,
+        ge=0,
+        validation_alias="RAG_CHUNK_OVERLAP",
+    )
+    rag_similarity_top_k: int = Field(
+        default=3,
+        gt=0,
+        validation_alias="RAG_SIMILARITY_TOP_K",
+    )
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000"],
         validation_alias="CORS_ORIGINS",
