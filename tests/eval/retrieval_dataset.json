@@ -1,0 +1,103 @@
+[
+  {
+    "question": "Какие технические поля обязательны в meta-файле?",
+    "relevant_doc_ids": ["meta_required_tech_fields.md"]
+  },
+  {
+    "question": "Какие обязательные системные поля должны быть описаны в meta-файле?",
+    "relevant_doc_ids": ["meta_required_tech_fields.md"]
+  },
+  {
+    "question": "Что означает поле ctl_action?",
+    "relevant_doc_ids": ["meta_required_tech_fields.md"]
+  },
+  {
+    "question": "Что означает поле ctl_validfrom?",
+    "relevant_doc_ids": ["meta_required_tech_fields.md"]
+  },
+  {
+    "question": "Что проверяет правило META_FIELDS_EXIST_IN_DATA?",
+    "relevant_doc_ids": ["meta_fields_exist_in_data.md"]
+  },
+  {
+    "question": "Что означает ошибка, если поле из meta-файла отсутствует в data-файле?",
+    "relevant_doc_ids": ["meta_fields_exist_in_data.md"]
+  },
+  {
+    "question": "Какие поля из meta-файла должны присутствовать в data-файле?",
+    "relevant_doc_ids": ["meta_fields_exist_in_data.md", "meta_required_tech_fields.md"]
+  },
+  {
+    "question": "Что проверяет правило DATA_FIELDS_EXIST_IN_META?",
+    "relevant_doc_ids": ["data_fields_exist_in_meta.md"]
+  },
+  {
+    "question": "Что означает ситуация, когда в data-файле есть поле, не описанное в meta-файле?",
+    "relevant_doc_ids": ["data_fields_exist_in_meta.md"]
+  },
+  {
+    "question": "Как проверить соответствие атрибутивного состава meta-файла и data-файла?",
+    "relevant_doc_ids": ["meta_fields_exist_in_data.md", "data_fields_exist_in_meta.md"]
+  },
+  {
+    "question": "Какие проверки выполняются между meta-файлом и data-файлом?",
+    "relevant_doc_ids": ["meta_fields_exist_in_data.md", "data_fields_exist_in_meta.md", "meta_file_format.md"]
+  },
+  {
+    "question": "Какие требования предъявляются к формату meta-файла?",
+    "relevant_doc_ids": ["meta_file_format.md"]
+  },
+  {
+    "question": "Какой формат должен иметь meta-файл?",
+    "relevant_doc_ids": ["meta_file_format.md"]
+  },
+  {
+    "question": "Какая структура ожидается у meta-файла?",
+    "relevant_doc_ids": ["meta_file_structure.md"]
+  },
+  {
+    "question": "Какие основные секции или элементы содержит meta-файл?",
+    "relevant_doc_ids": ["meta_file_structure.md"]
+  },
+  {
+    "question": "Какие типы данных допустимы в meta-файле?",
+    "relevant_doc_ids": ["meta_data_types.md"]
+  },
+  {
+    "question": "Как проверяются типы данных, указанные в meta-файле?",
+    "relevant_doc_ids": ["meta_data_types.md"]
+  },
+  {
+    "question": "Какие требования предъявляются к именованию файлов пакета?",
+    "relevant_doc_ids": ["file_naming.md"]
+  },
+  {
+    "question": "Как должны называться файлы пакета данных?",
+    "relevant_doc_ids": ["file_naming.md"]
+  },
+  {
+    "question": "Какие правила применяются при распаковке пакета данных?",
+    "relevant_doc_ids": ["package_unpacking.md"]
+  },
+  {
+    "question": "Что проверяется при распаковке пакета?",
+    "relevant_doc_ids": ["package_unpacking.md"]
+  },
+  {
+    "question": "Какие требования есть к кавычкам или экранированию данных?",
+    "relevant_doc_ids": ["data_quoting.md"]
+  },
+  {
+    "question": "Как должны обрабатываться кавычки в data-файле?",
+    "relevant_doc_ids": ["data_quoting.md"]
+  },
+  {
+    "question": "Какие правила помогают понять, можно ли передавать пакет дальше в обработку?",
+    "relevant_doc_ids": [
+      "package_unpacking.md",
+      "meta_fields_exist_in_data.md",
+      "data_fields_exist_in_meta.md",
+      "meta_required_tech_fields.md"
+    ]
+  }
+]
