@@ -101,7 +101,7 @@ class Settings(BaseSettings):
         validation_alias="RAG_BAREMETAL_COLLECTION",
     )
     rag_data_dir: Path = Field(
-        default=Path("./data/rag-block-03"),
+        default=Path("./data"),
         validation_alias="RAG_DATA_DIR",
     )
     rag_chunk_size: int = Field(
@@ -115,9 +115,23 @@ class Settings(BaseSettings):
         validation_alias="RAG_CHUNK_OVERLAP",
     )
     rag_similarity_top_k: int = Field(
-        default=3,
+        default=10,
         gt=0,
         validation_alias="RAG_SIMILARITY_TOP_K",
+    )
+    rag_reranker_enabled: bool = Field(
+        default=True,
+        validation_alias="RAG_RERANKER_ENABLED",
+    )
+    rag_reranker_top_n: int = Field(
+        default=5,
+        gt=0,
+        validation_alias="RAG_RERANKER_TOP_N",
+    )
+    rag_score_threshold: float = Field(
+        default=0.85,
+        ge=0,
+        validation_alias="RAG_SCORE_THRESHOLD",
     )
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000"],

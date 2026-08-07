@@ -1,27 +1,26 @@
-﻿import asyncio
-import time
-import uuid
+﻿import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from typing import Any
 
 from aiogram import Bot
 from aiogram.enums import ChatAction
-from aiogram.exceptions import TelegramRetryAfter
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.types import Message
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
 
 MAX_TELEGRAM_TEXT_LENGTH = 4096
-DRAFT_SAFE_LIMIT = 3900
-DRAFT_UPDATE_INTERVAL_SECONDS = 2.0
+EDIT_SAFE_LIMIT = 3900
+EDIT_UPDATE_INTERVAL_SECONDS = 0.8
 
 
 @dataclass
 class StreamResult:
     text: str
     backend_message_id: str | None = None
-
+    sources: list[dict[str, Any]] | None = None
 
 
 class NotifyRequest(BaseModel):
@@ -60,64 +59,131 @@ def build_api(
     return api
 
 
-def _draft_text(text: str) -> StreamResult:
-    if len(text) <= DRAFT_SAFE_LIMIT:
+def _telegram_safe_text(text: str) -> str:
+    if len(text) <= EDIT_SAFE_LIMIT:
         return text
 
-    return text[-DRAFT_SAFE_LIMIT:]
+    return (
+        text[:EDIT_SAFE_LIMIT]
+        + "\n\n…ответ длинный, продолжение будет отправлено следующим сообщением."
+    )
 
 
-async def _safe_send_message_draft(
+def _format_sources(
+    sources: list[dict[str, Any]],
+) -> str:
+    if not sources:
+        return ""
+
+    lines = [
+        "",
+        "Источники:",
+    ]
+
+    for index, source in enumerate(sources[:5], start=1):
+        source_id = source.get("id") or str(index)
+        file_name = source.get("file_name") or "источник без имени"
+        page = source.get("page")
+        score = source.get("score")
+
+        parts = [
+            f"[{source_id}] {file_name}",
+        ]
+
+        if page is not None:
+            parts.append(f"page={page}")
+
+        if isinstance(score, int | float):
+            parts.append(f"score={score:.3f}")
+
+        lines.append(", ".join(parts))
+
+    return "\n".join(lines)
+
+
+async def _safe_edit_message(
     message: Message,
-    draft_id: int,
     text: str,
 ) -> float:
-    """
-    Аккуратно обновляет Telegram draft.
-
-    Если Telegram просит подождать из-за flood control,
-    не падаем с исключением, а ставим паузу перед следующим draft-update.
-    """
     try:
-        await message.bot.send_message_draft(
-            chat_id=message.chat.id,
-            text=_draft_text(text),
-            draft_id=draft_id,
+        await message.edit_text(
+            text=_telegram_safe_text(text),
         )
-        return time.monotonic() + DRAFT_UPDATE_INTERVAL_SECONDS
+        return time.monotonic() + EDIT_UPDATE_INTERVAL_SECONDS
 
     except TelegramRetryAfter as error:
         retry_after = float(getattr(error, "retry_after", 3))
         return time.monotonic() + retry_after + 0.5
 
+    except TelegramBadRequest as error:
+        error_text = str(error).lower()
+
+        if "message is not modified" in error_text:
+            return time.monotonic() + EDIT_UPDATE_INTERVAL_SECONDS
+
+        return time.monotonic() + EDIT_UPDATE_INTERVAL_SECONDS
+
+
+async def _send_final_text(
+    draft_message: Message,
+    original_message: Message,
+    text: str,
+) -> None:
+    if len(text) <= MAX_TELEGRAM_TEXT_LENGTH:
+        await _safe_edit_message(
+            message=draft_message,
+            text=text,
+        )
+        return
+
+    first_part = text[:MAX_TELEGRAM_TEXT_LENGTH]
+
+    await _safe_edit_message(
+        message=draft_message,
+        text=first_part,
+    )
+
+    remaining_text = text[MAX_TELEGRAM_TEXT_LENGTH:]
+
+    while remaining_text.strip():
+        chunk = remaining_text[:MAX_TELEGRAM_TEXT_LENGTH]
+        remaining_text = remaining_text[MAX_TELEGRAM_TEXT_LENGTH:]
+
+        await original_message.answer(
+            text=chunk,
+        )
+
 
 async def stream_to_chat(
     message: Message,
     tokens: AsyncIterator[dict],
-) -> str:
-    """
-    Показывает streaming-ответ через Telegram sendMessageDraft.
+) -> StreamResult:
+    draft_message = await message.answer("Готовлю ответ...")
 
-    Draft обновляем не на каждый token, а с задержкой.
-    Это защищает от Telegram flood control.
-    Финальный send_message нужен, чтобы ответ остался в истории чата.
-    """
-    draft_id = uuid.uuid4().int & 0xFFFFFFFF
     buffer = ""
-    next_draft_at = 0.0
+    next_edit_at = 0.0
+    backend_message_id = None
+    sources: list[dict[str, Any]] = []
 
     await message.bot.send_chat_action(
         chat_id=message.chat.id,
         action=ChatAction.TYPING,
     )
 
-    backend_message_id = None
-
     async for event in tokens:
         event_type = event.get("type")
 
         if event_type == "done":
-            backend_message_id = event.get("message_id")
+            backend_message_id = event.get("message_id") or backend_message_id
+            continue
+
+        if event_type == "sources":
+            backend_message_id = event.get("message_id") or backend_message_id
+
+            raw_sources = event.get("sources", [])
+            if isinstance(raw_sources, list):
+                sources = raw_sources
+
             continue
 
         if event_type != "token":
@@ -131,39 +197,36 @@ async def stream_to_chat(
 
         now = time.monotonic()
 
-        if now >= next_draft_at:
-            next_draft_at = await _safe_send_message_draft(
-                message=message,
-                draft_id=draft_id,
+        if now >= next_edit_at:
+            next_edit_at = await _safe_edit_message(
+                message=draft_message,
                 text=buffer,
             )
 
     if not buffer.strip():
-        await message.bot.send_message(
-            chat_id=message.chat.id,
-            text="Backend вернул пустой ответ.",
-        )
-        return StreamResult(text=buffer, backend_message_id=backend_message_id)
+        empty_text = "Backend вернул пустой ответ."
 
-    # Один финальный draft-update перед обычным сообщением.
-    # Если Telegram не даст обновить draft — не страшно,
-    # главное ниже отправить финальный send_message.
-    await _safe_send_message_draft(
-        message=message,
-        draft_id=draft_id,
-        text=buffer,
+        await _safe_edit_message(
+            message=draft_message,
+            text=empty_text,
+        )
+
+        return StreamResult(
+            text=empty_text,
+            backend_message_id=backend_message_id,
+            sources=sources,
+        )
+
+    final_text = buffer + _format_sources(sources)
+
+    await _send_final_text(
+        draft_message=draft_message,
+        original_message=message,
+        text=final_text,
     )
 
-    if len(buffer) <= MAX_TELEGRAM_TEXT_LENGTH:
-        await message.bot.send_message(
-            chat_id=message.chat.id,
-            text=buffer,
-        )
-        return StreamResult(text=buffer, backend_message_id=backend_message_id)
-
-    await message.bot.send_message(
-        chat_id=message.chat.id,
-        text=buffer[:MAX_TELEGRAM_TEXT_LENGTH],
+    return StreamResult(
+        text=final_text,
+        backend_message_id=backend_message_id,
+        sources=sources,
     )
-
-    return StreamResult(text=buffer, backend_message_id=backend_message_id)

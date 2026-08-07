@@ -21,6 +21,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 COPY app ./app
 COPY bot ./bot
+COPY scripts ./scripts
+COPY data ./data
 COPY alembic ./alembic
 COPY alembic.ini ./
 COPY README.md ./
@@ -39,6 +41,9 @@ WORKDIR /app
 RUN useradd --create-home --uid 1000 appuser
 
 COPY --from=builder --chown=appuser:appuser /app /app
+
+RUN mkdir -p /app/.cache /app/data/uploads \
+    && chown -R appuser:appuser /app/.cache /app/data/uploads
 
 USER appuser
 

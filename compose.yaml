@@ -14,7 +14,29 @@
       postgres:
         condition: service_healthy
     restart: "no"
-
+  ingest:
+    image: llm-service:v1
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: sh -c "python scripts/wait_for_qdrant.py && python scripts/ingest.py data"
+    env_file:
+      - .env
+    environment:
+      OPENAI_BASE_URL: http://host.docker.internal:11434/v1
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION}
+      EMBEDDING_DIM: ${EMBEDDING_DIM}
+      RAG_DATA_DIR: ./data
+    volumes:
+      - rag_cache:/app/.cache
+    depends_on:
+      qdrant:
+        condition: service_started
+    restart: "no"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
   app:
     image: llm-service:v1
     build:
@@ -35,6 +57,9 @@
       CHAT_REPOSITORY: postgres
       BOT_URL: http://bot:9000
       PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:6006
+    volumes:
+       - rag_cache:/app/.cache
+       - rag_uploads:/app/data/uploads
     depends_on:
       redis:
         condition: service_healthy
@@ -44,6 +69,8 @@
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      ingest:
+          condition: service_completed_successfully
       phoenix:
         condition: service_started
     healthcheck:
@@ -56,8 +83,8 @@
         ]
       interval: 15s
       timeout: 5s
-      retries: 3
-      start_period: 15s
+      retries: 10
+      start_period: 180s
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -145,3 +172,5 @@ volumes:
   redis_data: {}
   phoenix_data: {}
   qdrant_storage: {}
+  rag_cache: { }
+  rag_uploads: { }

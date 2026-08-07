@@ -22,6 +22,7 @@ from app.core.exceptions import LLMError, LLMRateLimitError, LLMTimeoutError
 from app.routers.chat import router as llm_chat_router
 from app.routers.health import router as health_router
 from app.routers.models import router as models_router
+from app.routers.documents import router as documents_router
 
 from app.observability.tracing import setup_tracing
 
@@ -210,3 +211,4 @@ app.include_router(llm_chat_router)
 app.include_router(rag_router)
 app.include_router(admin_router)
 app.include_router(chats_router)
+app.include_router(documents_router)

@@ -1,7 +1,7 @@
 ﻿import json
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -81,6 +81,7 @@ async def list_messages(
 @router.post("/{chat_id}/messages")
 async def send_message(
     chat_id: UUID,
+    request: Request,
     content: str = Form(...),
     media: UploadFile | None = File(default=None),
     chat_service: ChatService = Depends(get_chat_service),
@@ -114,12 +115,21 @@ async def send_message(
     chat_service.check_input_moderation(content)
 
     async def event_stream():
+        rag_service = getattr(request.app.state, "rag_service", None)
+
         async for event in chat_service.send_message(
-            chat_id=chat_id,
-            user_content=content,
-            media_refs=media_refs,
+                chat_id=chat_id,
+                user_content=content,
+                media_refs=media_refs,
+                rag_service=rag_service,
         ):
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            payload = json.dumps(event, ensure_ascii=False)
+
+            if event.get("type") == "sources":
+                yield f"event: sources\ndata: {payload}\n\n"
+                continue
+
+            yield f"data: {payload}\n\n"
 
     return StreamingResponse(
         event_stream(),

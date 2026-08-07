@@ -1,4 +1,5 @@
-﻿import json
+﻿import asyncio
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID
@@ -25,7 +26,58 @@ SAFE_MODERATION_OUTPUT = (
 
 ChatCompletionMessage = dict[str, Any]
 ChatStreamEvent = dict[str, Any]
+FOLLOW_UP_WORDS = {
+    "них",
+    "него",
+    "нее",
+    "ним",
+    "ними",
+    "их",
+    "им",
+    "они",
+    "это",
+    "этого",
+    "этому",
+    "эти",
+    "этих",
+    "такие",
+    "таких",
+    "там",
+}
 
+FOLLOW_UP_PREFIXES = (
+    "а ",
+    "и ",
+    "тогда ",
+    "а для ",
+    "а если ",
+    "а какая ",
+    "а какой ",
+    "а какие ",
+    "а что ",
+)
+
+
+def _is_follow_up_question(text: str) -> bool:
+    normalized = text.strip().lower().replace("ё", "е")
+
+    if not normalized:
+        return False
+
+    if len(normalized) > 120:
+        return False
+
+    punctuation = ".,!?;:()[]{}\"'«»"
+    token_text = normalized
+
+    for char in punctuation:
+        token_text = token_text.replace(char, " ")
+
+    tokens = set(token_text.split())
+
+    return normalized.startswith(FOLLOW_UP_PREFIXES) or bool(
+        tokens & FOLLOW_UP_WORDS
+    )
 
 def _content_to_text_for_token_count(content: Any) -> str:
     if isinstance(content, str):
@@ -111,6 +163,21 @@ def _extract_delta_content(chunk: Any) -> str:
     delta = getattr(choices[0], "delta", None)
     return getattr(delta, "content", None) or ""
 
+def _extract_completion_content(response: Any) -> str:
+    if isinstance(response, dict):
+        choices = response.get("choices") or []
+        if not choices:
+            return ""
+
+        message = choices[0].get("message") or {}
+        return message.get("content") or ""
+
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return ""
+
+    message = getattr(choices[0], "message", None)
+    return getattr(message, "content", None) or ""
 
 def _message_to_completion_message(
     message: ChatMessage,
@@ -249,12 +316,217 @@ class ChatService:
             messages=messages,
             budget=budget,
         )
+    def _split_stream_chunks(
+        self,
+        text: str,
+        chunk_size: int = 120,
+    ) -> list[str]:
+        chunks = []
+        current = ""
 
-    async def send_message(
+        for word in text.split(" "):
+            candidate = f"{current} {word}".strip()
+
+            if len(candidate) <= chunk_size:
+                current = candidate
+                continue
+
+            if current:
+                chunks.append(current + " ")
+
+            current = word
+
+        if current:
+            chunks.append(current)
+
+        return chunks
+    def _find_previous_user_question(
+        self,
+        history: list[ChatMessage],
+        current_question: str,
+    ) -> str | None:
+        current_normalized = current_question.strip().lower()
+
+        for message in reversed(history):
+            if message.role != "user":
+                continue
+
+            content = message.content.strip()
+
+            if not content:
+                continue
+
+            if content.lower() == current_normalized:
+                continue
+
+            if _is_follow_up_question(current_question) and _is_follow_up_question(content):
+                continue
+
+            return content
+
+        return None
+
+    async def _build_rag_search_question(
+        self,
+        current_question: str,
+        history: list[ChatMessage],
+    ) -> str:
+        previous_user_question = self._find_previous_user_question(
+            history=history,
+            current_question=current_question,
+        )
+
+        if _is_follow_up_question(current_question) and previous_user_question:
+            search_question = (
+                f"{previous_user_question}. "
+                f"Уточнение пользователя: {current_question}"
+            )
+
+            logger.info(
+                "rag_follow_up_rewritten",
+                original_question=current_question,
+                search_question=search_question,
+            )
+
+            return search_question
+
+        previous_messages = [
+            message
+            for message in history
+            if message.content and message.content != current_question
+        ]
+
+        if not previous_messages:
+            return current_question
+
+        compact_history = previous_messages[-6:]
+
+        messages: list[ChatCompletionMessage] = [
+            {
+                "role": "system",
+                "content": (
+                    "Ты переписываешь follow-up вопрос пользователя "
+                    "в самостоятельный поисковый запрос для RAG. "
+                    "Не отвечай на вопрос. Верни только один уточнённый вопрос. "
+                    "Если вопрос уже самостоятельный, верни его без изменений."
+                ),
+            }
+        ]
+
+        for message in compact_history:
+            messages.append(
+                {
+                    "role": message.role,
+                    "content": message.content,
+                }
+            )
+
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Текущий вопрос пользователя:\n"
+                    f"{current_question}\n\n"
+                    "Самостоятельный вопрос для поиска:"
+                ),
+            }
+        )
+
+        try:
+            response = await self.llm_client.chat.completions.create(
+                model=self.default_model,
+                messages=messages,
+                stream=False,
+            )
+        except Exception:
+            logger.exception("rag_condense_failed")
+            return current_question
+
+        search_question = _extract_completion_content(response).strip()
+
+        return search_question or current_question
+    async def _send_rag_message(
         self,
         chat_id: UUID,
         user_content: str,
-        media_refs: dict[str, Any] | None = None,
+        rag_service: Any,
+    ) -> AsyncIterator[ChatStreamEvent]:
+        history = await self.repository.list_messages(
+            chat_id=chat_id,
+            limit=self.context_window,
+        )
+
+        search_question = await self._build_rag_search_question(
+            current_question=user_content,
+            history=history,
+        )
+
+        rag_result = await asyncio.to_thread(
+            rag_service.answer,
+            search_question,
+        )
+
+        assistant_content = str(rag_result.get("answer", "")).strip()
+
+        if not assistant_content:
+            return
+
+        output_result = self.moderation_service.check_output(
+            assistant_content,
+        )
+
+        if not output_result.allowed:
+            logger.warning(
+                "rag_output_replaced_by_moderation",
+                chat_id=str(chat_id),
+                categories=output_result.categories,
+                blocked_by=output_result.blocked_by,
+            )
+            assistant_content = SAFE_MODERATION_OUTPUT
+
+        assistant_message = await self.repository.append_message(
+            chat_id,
+            ChatMessage(
+                chat_id=chat_id,
+                role="assistant",
+                content=assistant_content,
+                media_refs={
+                    "rag": {
+                        "search_question": search_question,
+                        "top_score": rag_result.get("top_score"),
+                        "confident": rag_result.get("confident"),
+                        "sources": rag_result.get("sources", []),
+                    }
+                },
+            ),
+        )
+
+        for chunk in self._split_stream_chunks(assistant_content):
+            yield {
+                "type": "token",
+                "delta": chunk,
+            }
+            await asyncio.sleep(0)
+
+        yield {
+            "type": "sources",
+            "message_id": str(assistant_message.id),
+            "top_score": rag_result.get("top_score"),
+            "confident": rag_result.get("confident"),
+            "sources": rag_result.get("sources", []),
+        }
+
+        yield {
+            "type": "done",
+            "message_id": str(assistant_message.id),
+        }
+
+    async def send_message(
+            self,
+            chat_id: UUID,
+            user_content: str,
+            media_refs: dict[str, Any] | None = None,
+            rag_service: Any | None = None,
     ) -> AsyncIterator[ChatStreamEvent]:
         self.check_input_moderation(user_content)
 
@@ -274,6 +546,16 @@ class ChatService:
                 media_refs=media_refs,
             ),
         )
+
+        if rag_service is not None and media_refs is None:
+            async for event in self._send_rag_message(
+                    chat_id=chat_id,
+                    user_content=visible_content,
+                    rag_service=rag_service,
+            ):
+                yield event
+
+            return
 
         messages = await self._build_messages(chat)
 

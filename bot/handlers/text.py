@@ -34,7 +34,7 @@ async def handle_text(
 
         if result.backend_message_id:
             await message.answer(
-                "??????? ?????:",
+                "Оцените ответ:",
                 reply_markup=feedback_kb(result.backend_message_id),
             )
 
